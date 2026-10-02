@@ -51,6 +51,11 @@ UV_PROJECT_ENVIRONMENT=.venv-vllm uv sync --locked --extra vllm --python 3.12 --
 .venv-hf/bin/sonde run refusal
 ```
 
+The `vllm` backend is experimental: its loader is in, but extraction,
+generation and the parity spike have not run on a GPU yet, so the recipes
+default to `hf`, and `forward` and `generate` on vllm raise
+`NotImplementedError`.
+
 The Spark is shared. Always set `model.vllm.gpu_memory_utilization`, as the
 shipped recipes do: vLLM's default of 0.9 can freeze the box.
 
@@ -95,6 +100,8 @@ A run writes `runs/<name>/`:
 config.yaml              resolved config
 extract/                 run.json, manifest.json, shard_00000.safetensors, ...
 splits.json              train / val / test sample indices
+generations.jsonl        source row + response, response_ids
+steer/s<strength>.jsonl  one file per strength
 probes/<name>.npz        the selected probe; the only file here
 layers/B<block>.npz      every block's probe, named <name>@B<block>
 metrics.json             headline, per-block val table, test, baseline, control, n counts
@@ -106,6 +113,10 @@ Reruns behave as follows:
   extract settings changed, it refuses before loading anything; set
   `output.overwrite: true` to start over.
 - `train` and `score` overwrite their own outputs.
+- `generate` skips ids already in generations.jsonl. If the model, data,
+  generate or seed settings changed, it refuses before loading anything;
+  `output.overwrite: true` regenerates.
+- `steer` overwrites its files.
 
 ## Config reference
 
@@ -113,7 +124,7 @@ Reruns behave as follows:
 |---|---|---|
 | `name` | required | run dir is `<output.dir>/<name>` |
 | `seed` | `0` | drives subsampling, splits, init and data order |
-| `steps` | `[extract, train]` | `extract`, `train`, `score`, run in the listed order |
+| `steps` | `[extract, train]` | `generate`, `extract`, `train`, `score`, `steer`, run in the listed order |
 | `model.name` | required | HF hub id or local path |
 | `model.revision` | `null` | recorded in the fingerprint as given |
 | `model.dtype` | `bfloat16` | activations are stored in this dtype |
@@ -144,6 +155,9 @@ Reruns behave as follows:
 | `probe.max_fpr` | `0.01` | set: lowest threshold with val FPR ≤ `max_fpr`; `null`: best F1 |
 | `probe.select` | `recall_at_fpr` | `recall_at_fpr` needs `max_fpr`; `auroc`; `group_auroc` needs `data.group` |
 | `score` | `[]` | `{name, probe?, <any data key>}`; unset keys inherit from `data`, explicit `null` overrides |
+| `generate.max_tokens`, `generate.temperature`, `generate.top_p` | `256`, `0.7`, `1.0` | `temperature: 0` is greedy; top-k is off |
+| `steer.probe` | `null` | defaults to this run's `probes/<name>.npz`; direction is w/‖w‖ at its block |
+| `steer.mode`, `steer.strengths` | `add`, `[0.0]` | `add`: x += s·v; `ablate`: x −= s·(x·v)·v; strength 0 is the unedited baseline |
 | `output.dir`, `output.overwrite` | `runs`, `false` | |
 
 A section is required only when a listed step needs it:
@@ -153,6 +167,8 @@ A section is required only when a listed step needs it:
 | `extract` | `model`, `data`, `extract`, and `probe` when `keep: pooled` |
 | `train` | `data`, `probe` |
 | `score` | `model`, `data`, `score` |
+| `generate` | `model`, `data`, `generate` |
+| `steer` | `model`, `data`, `generate`, `steer` |
 
 These checks run when the config loads, and errors name the offending key:
 - Unknown keys are rejected.
