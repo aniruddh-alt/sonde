@@ -1,0 +1,22 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish that version to PyPI.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI trusted publishing; no API token is stored
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Check the tag matches the package version
+        run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
