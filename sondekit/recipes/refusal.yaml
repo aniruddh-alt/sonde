@@ -1,4 +1,4 @@
-# Refusal probe on Llama-3.1-8B-Instruct (data: experiments/refusal_probing).
+# Refusal probe on Llama-3.1-8B-Instruct (data: data/refusal, see its README).
 # The labels judge raw continuations generated without a chat template, so
 # format is raw and the probe only serves completion-style requests.
 # group keeps the 83 rows that share a prompt inside one split.
@@ -9,7 +9,7 @@ model:
   backend: hf
   vllm: {gpu_memory_utilization: 0.3, max_model_len: 4096}
 data:
-  path: experiments/refusal_probing/data/labeled.jsonl
+  path: data/refusal/labeled.jsonl
   text: original_prompt
   label: refusal_label
   id: sample_id
