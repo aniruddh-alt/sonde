@@ -1,0 +1,13 @@
+# CPU smoke run: gpt2 learns positive vs negative sentiment in seconds.
+# sonde run quickstart [-o output.dir=/tmp/runs]
+name: quickstart
+model: {name: gpt2, dtype: float32}
+data:
+  path: data/quickstart.jsonl
+  format: raw
+  split: [0.5, 0.25, 0.25]
+extract: {layers: all, window: prompt, keep: pooled}
+probe: {kind: linear, pooling: mean, epochs: 30, batch_size: 16}
+score:
+  - {name: heldout, path: data/quickstart_heldout.jsonl}
+steps: [extract, train, score]
