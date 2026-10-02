@@ -5,9 +5,11 @@ import pathlib
 
 import datasets
 import pytest
+import transformers
 
 from sondekit import config
 from sondekit import data
+from sondekit import fingerprint
 
 
 def _jsonl(tmp_path: pathlib.Path, rows: list[dict]) -> str:
@@ -113,3 +115,176 @@ def test_split_missing_class_names_the_split():
     labels = [0, 0, 0, 0, 0, 0, 1, 1, 1]
     with pytest.raises(ValueError, match="split 'val' has n_pos=0"):
         data.split(labels, [None] * 9, (0.7, 0.15, 0.15), seed=0)
+
+
+TEMPLATE = (
+    "{% for m in messages %}<|{{ m.role }}|>\n{{ m.content }}\n{% endfor %}"
+    "{% if add_generation_prompt %}<|assistant|>\n{% endif %}"
+)
+
+
+def _tok(template: str | None = None):
+    tok = transformers.AutoTokenizer.from_pretrained("gpt2")
+    tok.chat_template = template
+    return tok
+
+
+def _src(**kw) -> config.DataConfig:
+    return config.DataConfig(path="unused.jsonl", **kw)
+
+
+def _sample(**kw) -> data.Sample:
+    fields = dict(
+        id="0",
+        text=None,
+        messages=None,
+        response=None,
+        response_ids=None,
+        label=1,
+        group=None,
+        raw={},
+    )
+    return data.Sample(**{**fields, **kw})
+
+
+def test_raw_windows():
+    tok = _tok()
+    p = tok("Hello world").input_ids
+    r = tok(" yes sir", add_special_tokens=False).input_ids
+    src = _src(format="raw", response="r")
+    s = _sample(text="Hello world", response=" yes sir")
+    assert data.render(s, src, "prompt", tok).span == (0, len(p))
+    resp = data.render(s, src, "response", tok)
+    assert resp.ids == p + r and resp.span == (len(p), len(p) + len(r))
+    assert data.render(s, src, "all", tok).span == (0, len(p) + len(r))
+    assert data.prompt_format_of(src, tok) == fingerprint.RAW
+
+
+def test_chat_windows_and_prompt_format():
+    tok = _tok(TEMPLATE)
+    src = _src(system="be brief")
+    s = _sample(text="hi")
+    enc = data.render(s, src, "prompt", tok)
+    want = "<|system|>\nbe brief\n<|user|>\nhi\n<|assistant|>\n"
+    assert tok.decode(enc.ids) == want
+    assert enc.span == (0, len(enc.ids))
+    assert data.prompt_format_of(src, tok) == fingerprint.prompt_format(
+        TEMPLATE
+    )
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello there"},
+    ]
+    turn = data.render(
+        _sample(messages=msgs), _src(messages="m"), "last_turn", tok
+    )
+    assert tok.decode(turn.ids[turn.span[0] :]) == "hello there\n"
+
+
+def test_response_ids_are_reused_exactly():
+    tok = _tok()
+    s = _sample(text="Q", response="ignored", response_ids=[11, 12, 13])
+    enc = data.render(s, _src(format="raw", response="r"), "response", tok)
+    assert enc.ids[enc.span[0] :] == [11, 12, 13]
+
+
+def test_chat_render_has_no_double_bos():
+    tok = transformers.AutoTokenizer.from_pretrained(
+        "hf-internal-testing/tiny-random-LlamaForCausalLM"
+    )
+    enc = data.render(_sample(text="hi"), _src(), "prompt", tok)
+    assert enc.ids[0] == tok.bos_token_id
+    assert enc.ids[1] != tok.bos_token_id
+
+
+def test_chat_without_template_says_use_raw():
+    tok = _tok()
+    with pytest.raises(ValueError, match=r"set data\.format: raw"):
+        data.render(_sample(text="hi"), _src(), "prompt", tok)
+    with pytest.raises(ValueError, match=r"set data\.format: raw"):
+        data.prompt_format_of(_src(), tok)
+
+
+def test_drops_are_counted_never_empty():
+    tok = _tok(TEMPLATE)
+    long_prompt = _sample(text="word " * 50, response="yes")
+    no_response = _sample(text="q", response="")
+    ok = _sample(text="q", response="yes")
+    src = _src(response="r", max_length=16)
+    encoded, drops = data.encode_all(
+        [long_prompt, no_response, ok], src, "response", tok
+    )
+    assert drops == {"empty_window": 1, "empty_response": 1}
+    assert len(encoded) == 1
+    start, end = encoded[0].span
+    assert 0 <= start < end == len(encoded[0].ids) <= 16
+
+
+def test_max_length_clips_span():
+    tok = _tok()
+    s = _sample(text="one two three four five six")
+    enc = data.render(s, _src(format="raw", max_length=3), "prompt", tok)
+    assert len(enc.ids) == 3 and enc.span == (0, 3)
+
+
+def test_last_turn_drops():
+    tok = _tok(TEMPLATE)
+    user_last = [{"role": "user", "content": "hi"}]
+    with pytest.raises(data.Drop, match="not_assistant_last"):
+        data.render(
+            _sample(messages=user_last), _src(messages="m"), "last_turn", tok
+        )
+    thinking = TEMPLATE.replace(
+        "<|assistant|>\n{% endif %}", "<|assistant|>\n<think>{% endif %}"
+    )
+    msgs = [*user_last, {"role": "assistant", "content": "ok"}]
+    with pytest.raises(data.Drop, match="last_turn_prefix_mismatch"):
+        data.render(
+            _sample(messages=msgs),
+            _src(messages="m"),
+            "last_turn",
+            _tok(thinking),
+        )
+
+
+def test_all_rows_dropped_raises():
+    with pytest.raises(ValueError, match="every row was dropped"):
+        data.encode_all(
+            [_sample(text="q", response="")],
+            _src(format="raw", response="r"),
+            "response",
+            _tok(),
+        )
+
+
+def test_render_never_exceeds_the_model_context():
+    tok = _tok()
+    row = data.Sample("a", "word " * 1500, None, None, None, 1, None, {})
+    src = config.DataConfig(path="x.jsonl", format="raw")
+    enc = data.render(row, src, "prompt", tok)
+    assert len(enc.ids) == tok.model_max_length == 1024
+    assert enc.span == (0, 1024)
+
+
+def test_bad_or_empty_files_name_the_file(tmp_path):
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"text": "a", "label": 1}\nnot json\n')
+    with pytest.raises(ValueError, match=r"bad.jsonl:2: not valid JSON"):
+        data.load_samples(config.DataConfig(path=str(bad)), 0)
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("")
+    with pytest.raises(ValueError, match=r"empty.jsonl has no rows"):
+        data.load_samples(config.DataConfig(path=str(empty)), 0)
+
+
+def test_chat_template_kwargs_reach_the_template():
+    tok = _tok(
+        "{% for m in messages %}{{ m['content'] }}{% endfor %}"
+        "{% if enable_thinking is defined and not enable_thinking %} NOTHINK"
+        "{% endif %}"
+    )
+    row = data.Sample("a", "hi", None, None, None, 1, None, {})
+    for kwargs, marker in (({}, False), ({"enable_thinking": False}, True)):
+        src = config.DataConfig(path="x.jsonl", chat_template_kwargs=kwargs)
+        text = tok.decode(data.prompt_ids(row, src, tok))
+        assert ("NOTHINK" in text) is marker
