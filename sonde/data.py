@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import csv
 import dataclasses
 import json
@@ -13,6 +14,8 @@ import datasets
 import numpy as np
 
 from sonde import config
+from sonde import fingerprint
+from sonde import probe
 
 logger = logging.getLogger(__name__)
 
@@ -162,3 +165,141 @@ def split(
                 "both classes. Add data or change data.split"
             )
     return {name: sorted(idx) for name, idx in out.items()}
+
+
+@dataclasses.dataclass
+class Encoded:
+    id: str
+    ids: list[int]
+    span: tuple[int, int]
+    label: int | None
+    group: str | None
+
+
+class Drop(Exception):
+    """A row that cannot yield a non-empty window; the message is why."""
+
+
+def _template(tokenizer) -> str:
+    if tokenizer.chat_template is None:
+        raise ValueError(
+            f"data.format is chat but the {tokenizer.name_or_path} tokenizer "
+            "has no chat_template; set data.format: raw"
+        )
+    return tokenizer.chat_template
+
+
+def _chat_ids(tokenizer, messages: list[dict], gen_prompt: bool) -> list[int]:
+    _template(tokenizer)
+    text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=gen_prompt
+    )
+    return tokenizer(text, add_special_tokens=False).input_ids
+
+
+def _messages(sample: Sample, src: config.DataConfig) -> list[dict]:
+    if sample.messages is not None:
+        return sample.messages
+    system = [{"role": "system", "content": src.system}] if src.system else []
+    return [*system, {"role": "user", "content": sample.text}]
+
+
+def prompt_format_of(src: config.DataConfig, tokenizer) -> str:
+    """The `prompt_format` mechanica serves under for this data block.
+
+    Raises:
+        ValueError: If `format: chat` and the tokenizer has no template.
+    """
+    if src.format == "raw":
+        return fingerprint.RAW
+    return fingerprint.prompt_format(_template(tokenizer))
+
+
+def prompt_ids(sample: Sample, src: config.DataConfig, tokenizer) -> list[int]:
+    """Prompt token ids, generation prompt included for `format: chat`."""
+    if src.format == "raw":
+        return tokenizer(sample.text).input_ids
+    return _chat_ids(tokenizer, _messages(sample, src), True)
+
+
+def render(
+    sample: Sample, src: config.DataConfig, window: str, tokenizer
+) -> Encoded:
+    """Tokenizes one sample and locates its window.
+
+    Args:
+        sample: One loaded row.
+        src: Format, system prompt and `max_length`.
+        window: One of `probe.WINDOWS`.
+        tokenizer: A HF tokenizer.
+
+    Returns:
+        `ids` truncated to `max_length` and `span = (start, end)` with
+        `0 <= start < end <= len(ids)`.
+
+    Raises:
+        Drop: If the window is empty, or `last_turn` is not usable.
+        ValueError: On `window: last_turn` with `format: raw`, or a chat
+            format without a chat template.
+    """
+    if window == "last_turn":
+        if src.format == "raw":
+            raise ValueError(
+                "extract.window: last_turn needs data.format: chat"
+            )
+        msgs = _messages(sample, src)
+        if not msgs or msgs[-1]["role"] != "assistant":
+            raise Drop("not_assistant_last")
+        ids = _chat_ids(tokenizer, msgs, False)
+        start = probe.last_turn_start(tokenizer, msgs)
+        if ids[:start] != _chat_ids(tokenizer, msgs[:-1], True):
+            raise Drop("last_turn_prefix_mismatch")
+    else:
+        ids = prompt_ids(sample, src, tokenizer)
+        start = 0
+        if window != "prompt":
+            r = sample.response_ids or (
+                tokenizer(sample.response, add_special_tokens=False).input_ids
+                if sample.response
+                else []
+            )
+            if window == "response":
+                if not r:
+                    raise Drop("empty_response")
+                start = len(ids)
+            ids = ids + r
+    ids = ids[: src.max_length]
+    if start >= len(ids):
+        raise Drop("empty_window")
+    return Encoded(
+        sample.id, ids, (start, len(ids)), sample.label, sample.group
+    )
+
+
+def encode_all(
+    samples: Sequence[Sample], src: config.DataConfig, window: str, tokenizer
+) -> tuple[list[Encoded], dict[str, int]]:
+    """Renders every sample, counting drops by reason.
+
+    Returns:
+        `(encoded, drops)`, encoded in sample order.
+
+    Raises:
+        ValueError: If every row is dropped.
+    """
+    encoded, drops = [], collections.Counter()
+    for sample in samples:
+        try:
+            encoded.append(render(sample, src, window, tokenizer))
+        except Drop as e:
+            drops[str(e)] += 1
+    if drops:
+        logger.warning(
+            "dropped %d of %d rows: %s",
+            drops.total(),
+            len(samples),
+            dict(drops),
+        )
+    if not encoded:
+        raise ValueError(f"every row was dropped: {dict(drops)}")
+    return encoded, dict(drops)
