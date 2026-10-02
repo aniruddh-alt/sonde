@@ -42,6 +42,27 @@ def last_turn_start(tokenizer, messages: list[dict]) -> int:
     return len(tokenizer(text, add_special_tokens=False)["input_ids"])
 
 
+def _sigmoid(z) -> np.ndarray:
+    z = np.clip(np.asarray(z, dtype=np.float32), -30.0, 30.0)
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def _pool(
+    logits: np.ndarray, pooling: str, rolling_window: int | None
+) -> float:
+    """Reduces per-token logits [T] to one logit."""
+    if pooling == "mean":
+        return float(logits.mean())
+    if pooling == "last":
+        return float(logits[-1])
+    if pooling == "max":
+        return float(logits.max())
+    if rolling_window is None or logits.size < rolling_window:
+        return float(logits.mean())
+    windows = np.lib.stride_tricks.sliding_window_view(logits, rolling_window)
+    return float(windows.mean(axis=1).max())
+
+
 def _nonempty_str(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -143,6 +164,133 @@ class Probe:
                 raise ValueError(
                     "probe escalate_threshold must be between 0 and threshold"
                 )
+
+    def logits(self, acts) -> np.ndarray:
+        """Per-token logits of a linear probe.
+
+        Args:
+            acts: [T, H] or [H] activations at `block`.
+
+        Returns:
+            [T] float32 `acts @ w + bias`.
+
+        Raises:
+            ValueError: For an attention probe, which has no per-token logit.
+        """
+        if self.kind != "linear":
+            raise ValueError("logits() is defined for linear probes only")
+        acts = np.atleast_2d(np.asarray(acts, dtype=np.float32))
+        return acts @ self.w + self.bias
+
+    def pooled_score_from_logits(self, logits) -> float:
+        """Pools logits that already include the bias, then applies sigmoid.
+
+        The path mechanica's instream scorer uses, on `logits()` output.
+
+        Args:
+            logits: [T] per-token logits.
+
+        Returns:
+            The probe score in [0, 1].
+
+        Raises:
+            ValueError: For an attention probe.
+        """
+        if self.kind != "linear":
+            raise ValueError("attention probes pool activations, not logits")
+        logits = np.atleast_1d(np.asarray(logits, dtype=np.float32))
+        return float(_sigmoid(_pool(logits, self.pooling, self.rolling_window)))
+
+    def pooled_logit(self, acts) -> float:
+        """The pooled logit, before the sigmoid.
+
+        RL rewards use this (r' = r - lambda * logit) because the sigmoid
+        saturates.
+
+        Args:
+            acts: [T, H] activations over the window, or one [H] row.
+
+        Returns:
+            The window's logit; pooling acts on logits.
+        """
+        if self.q is None:
+            return _pool(self.logits(acts), self.pooling, self.rolling_window)
+        acts = np.atleast_2d(np.asarray(acts, dtype=np.float32))
+        attn = acts @ self.q
+        attn = np.exp(attn - attn.max())
+        return float(attn @ (acts @ self.w) / attn.sum() + self.bias)
+
+    def pooled_score(self, acts) -> float:
+        """The score the threshold was calibrated on.
+
+        Args:
+            acts: [T, H] activations over the window, or one [H] row.
+
+        Returns:
+            sigmoid(pooled_logit(acts)), in [0, 1].
+        """
+        return float(_sigmoid(self.pooled_logit(acts)))
+
+    def flag(self, acts) -> bool:
+        """Whether `pooled_score(acts) >= threshold`."""
+        return self.pooled_score(acts) >= self.threshold
+
+    def escalates(self, score: float) -> bool:
+        """Whether a score is in the review band: uncertain, not blocked."""
+        if self.escalate_threshold is None:
+            return False
+        return self.escalate_threshold <= score < self.threshold
+
+    def serves(
+        self,
+        fingerprint: str | None,
+        adapter: str | None,
+        prompt_format: str | None = "unchecked",
+    ) -> str | None:
+        """Why this probe must not score the running model, or None if it may.
+
+        Fail-closed: a probe or server that cannot state its checkpoint or
+        prompt format is refused.
+
+        Args:
+            fingerprint: Serving checkpoint fingerprint.
+            adapter: The request's LoRA adapter, or None for the base model.
+            prompt_format: Served prompt format; "unchecked" skips the check.
+
+        Returns:
+            A refusal reason, or None when the probe may serve.
+        """
+        if self.model_fingerprint is None:
+            return "probe carries no checkpoint fingerprint; retrain it"
+        if fingerprint is None:
+            return "serving checkpoint could not be fingerprinted"
+        if fingerprint != self.model_fingerprint:
+            return (
+                f"checkpoint mismatch (probe={self.model_fingerprint}, "
+                f"serving={fingerprint}): fine-tuning invalidates a probe"
+            )
+        if adapter is not None and adapter not in self.adapters:
+            return f"adapter {adapter!r} is not one this probe was validated on"
+        if prompt_format == "unchecked":
+            return None
+        if self.prompt_format is None:
+            return "probe does not record its prompt format; retrain it"
+        if prompt_format is None:
+            return "served prompt format could not be determined"
+        if prompt_format != self.prompt_format:
+            return (
+                f"prompt format mismatch (probe={self.prompt_format}, "
+                f"serving={prompt_format})"
+            )
+        return None
+
+    def vllm_aux_layer(self) -> int:
+        """The vLLM `extract_hidden_states` aux id that reads `block`."""
+        return self.block + 1
+
+    def backend(self) -> str:
+        """The backend token of `engine`, e.g. "vllm" or "hf"."""
+        return self.engine.split("==", 1)[0]
 
     def save(self, path: str) -> str:
         """Writes the probe atomically.
