@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import torch
 
 from sonde import backends
 from sonde import config
 from sonde import data
 from sonde import generate
+from sonde import probe
+from sonde import runner
 
 BLOCK = 5
 GREEDY = config.GenerateConfig(max_tokens=8, temperature=0.0)
@@ -135,3 +138,62 @@ def test_generations_reload_with_exact_response_ids(tmp_path):
         p = data.prompt_ids(s, src, tok)
         assert enc.ids == p + row["response_ids"]
         assert enc.span == (len(p), len(enc.ids))
+
+
+def test_steer_run_strength_zero_matches_generate(tmp_path):
+    _, _, v = _gpt2()
+    unlabeled = [{"id": r["id"], "text": r["text"]} for r in _rows()]
+    _write_rows(tmp_path / "in.jsonl", unlabeled)
+    cfg = config.RunConfig.model_validate(
+        {
+            "name": "t",
+            "model": {"name": "gpt2", "dtype": "float32"},
+            "data": {"path": str(tmp_path / "in.jsonl"), "format": "raw"},
+            "generate": {"max_tokens": 6, "temperature": 0.0},
+            "steer": {"mode": "add", "strengths": [0, 100]},
+            "output": {"dir": str(tmp_path)},
+            "steps": ["generate", "steer"],
+        }
+    )
+    (tmp_path / "t" / "probes").mkdir(parents=True)
+    probe.Probe(
+        name="t",
+        kind="linear",
+        w=(3.0 * v).numpy(),
+        bias=0.0,
+        block=BLOCK,
+        window="prompt",
+        pooling="mean",
+        threshold=0.5,
+        model="gpt2",
+        engine="hf==test",
+        model_fingerprint=None,
+        prompt_format="raw",
+    ).save(str(tmp_path / "t" / "probes" / "t.npz"))
+    run_dir = runner.run(cfg)
+    gen = _read_rows(run_dir / "generations.jsonl")
+    s0 = _read_rows(run_dir / "steer" / "s0.jsonl")
+    s100 = _read_rows(run_dir / "steer" / "s100.jsonl")
+    assert [r["response_ids"] for r in s0] == [r["response_ids"] for r in gen]
+    assert [r["response_ids"] for r in s100] != [r["response_ids"] for r in gen]
+    assert [r["id"] for r in s100] == ["a", "b", "c"]
+    runner.run(cfg)
+    assert len(_read_rows(run_dir / "steer" / "s0.jsonl")) == 3
+
+
+def test_generate_rerun_with_edited_config_refuses_before_load(
+    tmp_path, monkeypatch
+):
+    cfg = _generate_cfg(tmp_path)
+    run_dir = runner.run(cfg)
+    before = (run_dir / "config.yaml").read_text()
+    raw = cfg.model_dump()
+    raw["generate"]["temperature"] = 0.9
+
+    def no_load(cfg):
+        raise AssertionError("model loaded")
+
+    monkeypatch.setattr(backends, "load_model", no_load)
+    with pytest.raises(ValueError, match="overwrite"):
+        runner.run(config.RunConfig.model_validate(raw))
+    assert (run_dir / "config.yaml").read_text() == before
