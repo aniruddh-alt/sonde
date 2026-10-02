@@ -36,7 +36,7 @@ Success means:
 | D9 | Two probe kinds: `linear` (with `pooling`) and `attention`. |
 | D10 | Extraction is always a prefill of given token ids. Capturing activations during generation is deferred. |
 | D11 | Config is pydantic with `extra="forbid"`, plus an explicit `steps:` list. OmegaConf is dropped. |
-| D12 | Default layer-selection metric is val AUROC. `recall_at_fpr` is opt-in. |
+| D12 | Headline metric is recall at `max_fpr` (default 1% FPR), as Goodfire's probe-monitor guide recommends. Layers are selected by it (AUROC breaks ties), and every run is reported against a bag-of-words text baseline. |
 | D13 | Steering strength is a plain multiple of the unit vector, applied at every step (prefill and decode). |
 | D14 | Python floor is 3.12. |
 
@@ -381,14 +381,14 @@ same thing as `Probe.pooled_score`. Pooling acts on logits, and `rolling_mean` u
 
 **Thresholds** are computed on val, using scores from the **exported numpy `Probe`**, so the
 threshold lives on exactly the scale mechanica compares against.
-- If `max_fpr` is set: the lowest threshold whose val FPR is at most `max_fpr`. If none exists,
-  record `threshold_failed: true` and fall back to best F1. Never raise.
-- Otherwise: the best-F1 threshold.
+- If `max_fpr` is set (default `0.01`): the lowest threshold whose val FPR is at most `max_fpr`.
+  If none exists, record `threshold_failed: true` and fall back to best F1. Never raise.
+- Otherwise (`max_fpr: null`): the best-F1 threshold.
 
 **Metrics** are numpy, with no torchmetrics. They are:
+- **recall at `max_fpr`**, the headline;
 - rank-based AUROC;
-- F1, precision, recall and FPR at the threshold;
-- recall at `max_fpr` when it is set.
+- F1, precision, recall and FPR at the threshold.
 
 Each metric records the `n_pos` / `n_neg` it was computed on.
 
@@ -396,18 +396,31 @@ Each metric records the `n_pos` / `n_neg` it was computed on.
 1. Read the manifest. `data.split` produces the splits, written to `splits.json`.
 2. For each extracted block, fit on train and score on val.
 3. Select by `probe.select`:
-   - `auroc` (default);
-   - `recall_at_fpr`, which requires `max_fpr`; ties break by AUROC.
+   - `recall_at_fpr` (default), at `max_fpr`; ties break by AUROC;
+   - `auroc`.
 4. Score test once, on the selected block only.
 5. Run the control: refit on train with shuffled labels, then report AUROC on val with the true
    labels as `control_auroc`. `controls_passed = control_auroc < 0.6`. Never raise.
+6. Fit the text baseline on the same splits, a check that the probe beats surface features
+   (Wang et al., 2509.03888):
+   - Features: lowercase word counts (`re.findall(r"\w+")`) over the window's text, using a
+     vocabulary of the 5,000 most frequent train-split words.
+   - The window's text is the prompt for `prompt`, the response for `response`, both for `all`,
+     and the last message for `last_turn`.
+   - The model is a `LinearProbe` (`pooling: mean`, `keep: pooled`) trained with the same `fit`.
+     Its threshold is chosen on val at `max_fpr`, and it is scored on test.
+   - `ponytail:` bag-of-words only; add TF-IDF or an LLM-judge baseline when a recipe needs a
+     stronger bar.
+7. Write the headline: `metrics.json["headline"] = {max_fpr, recall_at_fpr, baseline_recall_at_fpr,
+   auroc, baseline_auroc, n_pos, n_neg}` on test, and print it as the last line of the step's log.
+   `score` writes the same headline per entry (probe only).
 
 Outputs:
 - `probes/{name}.npz` is the selected probe and the only file in `probes/`, so it is the
   directory to hand to mechanica.
 - `layers/B{block}.npz` holds every block's probe, named `{name}@B{block}`.
-- `metrics.json` holds the per-block val table, test results, control, threshold info and n
-  counts.
+- `metrics.json` holds the headline, the per-block val table, test results, the baseline,
+  the control, threshold info and n counts.
 
 ## 10. Score, generation, steering (`score.py`, `generate.py`, `steer.py`)
 
@@ -463,7 +476,7 @@ extract: {layers: all, window: prompt, keep: pooled, batch_size: 16,
           shard_size: 4096, shard_bytes: 2147483648}
 probe:   {kind: linear, pooling: mean, rolling_window: null, init: random,
           epochs: 20, lr: 1.0e-3, weight_decay: 0.0, batch_size: 256, patience: 3,
-          max_fpr: 0.01, select: auroc}
+          max_fpr: 0.01, select: recall_at_fpr}
 score:   [{name: xstest, path: data/xstest.jsonl}]
 generate: {max_tokens: 256, temperature: 0.7, top_p: 0.95}
 steer:   {mode: add, strengths: [0, 4, 8]}
@@ -489,7 +502,8 @@ steps:   [extract, train, score]
 - `keep: pooled` requires `kind: linear` with `pooling` in {mean, last}.
 - `attention`, `max` and `rolling_mean` require `keep: tokens`.
 - `rolling_window ≥ 1` iff `rolling_mean`.
-- `select: recall_at_fpr` requires `max_fpr`.
+- `select: recall_at_fpr` (the default) requires `max_fpr`; set `select: auroc` to run with
+  `max_fpr: null`.
 - `window: response` requires `data.response`.
 - `init: diff_means` requires `kind: linear` and `epochs: 0`.
 - `temperature ≥ 0`.
@@ -565,9 +579,9 @@ never by catching exceptions. `pythonpath` is removed from the pytest config.
 | `test_probe.py` | round-trip; `serves()` refusals; numpy-only import of `probe` and `fingerprint`; legacy and unknown-format npz refused; validation errors; `vllm_aux_layer`; `load_dir` duplicate and empty refusals |
 | `test_data.py` | chat render has no double BOS; window spans for all four windows; drops are counted; `label_map` and label validation; group-disjoint stratified split |
 | `test_extract.py` | **gpt2 batch invariance (bs 1 vs bs 4, allclose)**; shard and manifest layout; resume skips shards; a hash mismatch refuses before load |
-| `test_train.py` | threshold at `max_fpr` on numpy scores; standardisation fold is exact; σ floor; diff-means closed form; seed reproducibility |
+| `test_train.py` | threshold at `max_fpr` on numpy scores; recall@FPR; standardisation fold is exact; σ floor; diff-means closed form; seed reproducibility; bag-of-words baseline separates keyword-only synthetic data |
 | `test_probes.py` | torch forward equals numpy `Probe` for every kind and pooling, including `T < rolling_window` |
-| `test_sweep.py` | selects the planted block on synthetic data; control is recorded, not raised |
+| `test_sweep.py` | selects the planted block on synthetic data; control is recorded, not raised; `metrics.json["headline"]` holds probe and baseline recall@FPR |
 | `test_config.py` | every shipped recipe loads with no network; unknown-key error names its path; overrides; each cross-field check |
 | `test_e2e.py` | `sonde run quickstart` on CPU; gpt2 extract → train → score |
 | `test_steer.py` (phase 6) | strength 0 equals unsteered; gpt2 `add` at strength 1 changes the output through the backend's own path; `ablate` removes the projection |
