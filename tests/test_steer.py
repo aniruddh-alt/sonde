@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 
 import torch
 
 from sondekit import backends
 from sondekit import config
+from sondekit import data
+from sondekit import generate
 
 BLOCK = 5
 GREEDY = config.GenerateConfig(max_tokens=8, temperature=0.0)
@@ -18,6 +21,35 @@ def _gpt2() -> tuple[backends.Loaded, list[list[int]], torch.Tensor]:
     tok = loaded.tokenizer
     v = torch.randn(loaded.hidden, generator=torch.Generator().manual_seed(0))
     return loaded, [tok(t).input_ids for t in TEXTS], v / v.norm()
+
+
+def _write_rows(path, rows) -> None:
+    path.write_text("".join(f"{json.dumps(r)}\n" for r in rows))
+
+
+def _read_rows(path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def _rows() -> list[dict]:
+    return [
+        {"id": k, "text": t, "label": i % 2}
+        for i, (k, t) in enumerate(zip("abc", TEXTS, strict=True))
+    ]
+
+
+def _generate_cfg(tmp_path) -> config.RunConfig:
+    _write_rows(tmp_path / "in.jsonl", _rows())
+    return config.RunConfig.model_validate(
+        {
+            "name": "g",
+            "model": {"name": "gpt2", "dtype": "float32"},
+            "data": {"path": str(tmp_path / "in.jsonl"), "format": "raw"},
+            "generate": {"max_tokens": 4, "temperature": 0.0},
+            "output": {"dir": str(tmp_path)},
+            "steps": ["generate"],
+        }
+    )
 
 
 def test_hf_strength_zero_equals_unsteered():
@@ -72,3 +104,34 @@ def test_hf_sampling_is_seeded():
     first = backends.generate(loaded, prompts, hot, 3)
     assert backends.generate(loaded, prompts, hot, 3) == first
     assert backends.generate(loaded, prompts, hot, 4) != first
+
+
+def test_generate_resume_skips_done_ids(tmp_path):
+    cfg = _generate_cfg(tmp_path)
+    out = tmp_path / "generations.jsonl"
+    _write_rows(out, [{"id": "a", "response": "SENTINEL"}])
+    generate.run(cfg, tmp_path)
+    got = _read_rows(out)
+    assert [r["id"] for r in got] == ["a", "b", "c"]
+    assert got[0]["response"] == "SENTINEL"
+    assert got[1]["text"] == TEXTS[1] and got[1]["label"] == 1
+    generate.run(cfg, tmp_path)
+    assert _read_rows(out) == got
+
+
+def test_generations_reload_with_exact_response_ids(tmp_path):
+    cfg = _generate_cfg(tmp_path)
+    generate.run(cfg, tmp_path)
+    rows = _read_rows(tmp_path / "generations.jsonl")
+    src = config.DataConfig(
+        path=str(tmp_path / "generations.jsonl"),
+        response="response",
+        format="raw",
+    )
+    tok = _gpt2()[0].tokenizer
+    for row, s in zip(rows, data.load_samples(src, 0), strict=True):
+        assert s.response_ids == row["response_ids"]
+        enc = data.render(s, src, "response", tok)
+        p = data.prompt_ids(s, src, tok)
+        assert enc.ids == p + row["response_ids"]
+        assert enc.span == (len(p), len(enc.ids))
