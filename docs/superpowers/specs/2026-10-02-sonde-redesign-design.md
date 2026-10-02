@@ -151,7 +151,9 @@ Any violation raises `ValueError`.
 
 **Scoring.** All pooling acts on logits, and the sigmoid is applied after pooling.
 - `logits(acts [T, H]) -> [T]` is `acts @ w + bias`. Linear only; attention raises.
-- `pooled_score(acts [T, H] | [H]) -> float` pools the logits, then applies `sigmoid`. The poolings:
+- `pooled_logit(acts [T, H] | [H]) -> float` pools the logits; `pooled_score` is
+  `sigmoid(pooled_logit)`. RL rewards use the logit (`r' = r − λ·logit`, Goodfire's Anatomy of
+  Post-Training, 2606.12360) because the sigmoid saturates. The poolings:
   - `mean`, `last`, `max`;
   - `rolling_mean`: max over contiguous stride-1 windows of the window mean. If
     `T < rolling_window`, it is the mean over all T;
@@ -388,16 +390,25 @@ threshold lives on exactly the scale mechanica compares against.
 **Metrics** are numpy, with no torchmetrics. They are:
 - **recall at `max_fpr`**, the headline;
 - rank-based AUROC;
-- F1, precision, recall and FPR at the threshold.
+- F1, precision, recall and FPR at the threshold;
+- `group_auroc` when `data.group` is set: AUROC within each group that has both classes,
+  averaged. It measures whether the probe ranks completions *of the same prompt* correctly,
+  which is all that GRPO's group-relative advantage uses. This is the headline for reward probes.
 
-Each metric records the `n_pos` / `n_neg` it was computed on.
+Each metric records the `n_pos` / `n_neg` it was computed on (and `n_groups` for
+`group_auroc`). The test headline also carries 95% bootstrap CIs: 1,000 resamples with numpy
+and a fixed seed, for recall at `max_fpr` and AUROC. When `n_neg × max_fpr < 10` in a split, the
+metrics log a warning and record `small_n: true`, because a 1% FPR threshold on 200 negatives
+rests on 2 samples.
 
 **Train step (`sweep.py`).**
 1. Read the manifest. `data.split` produces the splits, written to `splits.json`.
 2. For each extracted block, fit on train and score on val.
 3. Select by `probe.select`:
-   - `recall_at_fpr` (default), at `max_fpr`; ties break by AUROC;
-   - `auroc`.
+   - `recall_at_fpr` (default), at `max_fpr`; ties break by AUROC. If val is `small_n`, it
+     selects by AUROC instead and records `select_fallback: auroc`;
+   - `auroc`;
+   - `group_auroc` (requires `data.group`), for RL-reward probes.
 4. Score test once, on the selected block only.
 5. Run the control: refit on train with shuffled labels, then report AUROC on val with the true
    labels as `control_auroc`. `controls_passed = control_auroc < 0.6`. Never raise.
@@ -409,11 +420,17 @@ Each metric records the `n_pos` / `n_neg` it was computed on.
      and the last message for `last_turn`.
    - The model is a `LinearProbe` (`pooling: mean`, `keep: pooled`) trained with the same `fit`.
      Its threshold is chosen on val at `max_fpr`, and it is scored on test.
-   - `ponytail:` bag-of-words only; add TF-IDF or an LLM-judge baseline when a recipe needs a
-     stronger bar.
-7. Write the headline: `metrics.json["headline"] = {max_fpr, recall_at_fpr, baseline_recall_at_fpr,
-   auroc, baseline_auroc, n_pos, n_neg}` on test, and print it as the last line of the step's log.
-   `score` writes the same headline per entry (probe only).
+   - A length-confound baseline also runs: the AUROC of the window's token count. The Silico
+     report's first probe looked strong (AUROC 0.98) but was mostly picking up a confound.
+   - `ponytail:` bag-of-words and length only; add TF-IDF or an LLM-judge baseline when a
+     recipe needs a stronger bar.
+7. Write the headline: `metrics.json["headline"]` on test, printed as the last line of the
+   step's log. Fields:
+   - `max_fpr`;
+   - `recall_at_fpr` and `auroc`, each with a CI;
+   - `baseline_recall_at_fpr`, `baseline_auroc`, `length_auroc`;
+   - `group_auroc` (if set);
+   - `n_pos`, `n_neg`, `small_n`.
 
 Outputs:
 - `probes/{name}.npz` is the selected probe and the only file in `probes/`, so it is the
@@ -434,6 +451,13 @@ Outputs:
   with the run.
 - It writes `score/<entry>/{scores.jsonl, metrics.json}`. Metrics are written only when labels
   exist.
+- The metrics report the deployed operating point: realized FPR and recall at the probe's
+  **frozen** `threshold`, which is what mechanica will see. They also report recall at
+  `max_fpr` re-thresholded on that set, AUROC and `group_auroc`.
+  - A benign-only set reports FPR only, and a positive-only set reports recall only. Neither
+    raises.
+  - Benign-only sets are the main measure of overtriggering. In the Silico report, the
+    intended ~1% FPR came out as 2.9% on new data.
 
 **Generate.**
 - Renders prompts through `data.render`, then calls the backend's generate with `generate`
@@ -502,6 +526,7 @@ steps:   [extract, train, score]
 - `keep: pooled` requires `kind: linear` with `pooling` in {mean, last}.
 - `attention`, `max` and `rolling_mean` require `keep: tokens`.
 - `rolling_window ≥ 1` iff `rolling_mean`.
+- `select: group_auroc` requires `data.group`.
 - `select: recall_at_fpr` (the default) requires `max_fpr`; set `select: auroc` to run with
   `max_fpr: null`.
 - `window: response` requires `data.response`.
@@ -576,14 +601,14 @@ never by catching exceptions. `pythonpath` is removed from the pytest config.
 
 | File | Proves |
 |---|---|
-| `test_probe.py` | round-trip; `serves()` refusals; numpy-only import of `probe` and `fingerprint`; legacy and unknown-format npz refused; validation errors; `vllm_aux_layer`; `load_dir` duplicate and empty refusals |
+| `test_probe.py` | round-trip; `serves()` refusals; numpy-only import of `probe` and `fingerprint`; legacy and unknown-format npz refused; validation errors; `pooled_logit` and `pooled_score` agree; `vllm_aux_layer`; `load_dir` duplicate and empty refusals |
 | `test_data.py` | chat render has no double BOS; window spans for all four windows; drops are counted; `label_map` and label validation; group-disjoint stratified split |
 | `test_extract.py` | **gpt2 batch invariance (bs 1 vs bs 4, allclose)**; shard and manifest layout; resume skips shards; a hash mismatch refuses before load |
-| `test_train.py` | threshold at `max_fpr` on numpy scores; recall@FPR; standardisation fold is exact; σ floor; diff-means closed form; seed reproducibility; bag-of-words baseline separates keyword-only synthetic data |
+| `test_train.py` | threshold at `max_fpr` on numpy scores; recall@FPR; standardisation fold is exact; σ floor; diff-means closed form; seed reproducibility; bag-of-words baseline separates keyword-only synthetic data; `group_auroc` on hand-built groups; bootstrap CI contains the point estimate; `small_n` flag |
 | `test_probes.py` | torch forward equals numpy `Probe` for every kind and pooling, including `T < rolling_window` |
-| `test_sweep.py` | selects the planted block on synthetic data; control is recorded, not raised; `metrics.json["headline"]` holds probe and baseline recall@FPR |
+| `test_sweep.py` | selects the planted block on synthetic data; control is recorded, not raised; `metrics.json["headline"]` holds probe and baseline recall@FPR; small-n val falls back to AUROC selection |
 | `test_config.py` | every shipped recipe loads with no network; unknown-key error names its path; overrides; each cross-field check |
-| `test_e2e.py` | `sonde run quickstart` on CPU; gpt2 extract → train → score |
+| `test_e2e.py` | `sonde run quickstart` on CPU; gpt2 extract → train → score; score on a benign-only set reports FPR at the frozen threshold without raising; score refuses a mismatched `prompt_format` / fingerprint |
 | `test_steer.py` (phase 6) | strength 0 equals unsteered; gpt2 `add` at strength 1 changes the output through the backend's own path; `ablate` removes the projection |
 | gpu, Spark | two prompts with different `response` spans give different pooled rows, and each matches hf |
 
