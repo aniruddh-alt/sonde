@@ -378,7 +378,9 @@ same thing as `Probe.pooled_score`. Pooling acts on logits, and `rolling_mean` u
 - `pos_weight = n_neg / n_pos`, and weight decay applies to weights only.
 - Early stopping on val loss with `patience`; `0` means off. The best epoch is kept in memory.
 - `init: diff_means` requires `kind: linear` and `epochs: 0`. It is computed on raw train
-  features with no standardisation and no fold: `w = μ₊ − μ₋`, `b = −w·(μ₊ + μ₋)/2`. This
+  features with no standardisation and no fold: `w = (μ₊ − μ₋) / std(X_train·(μ₊ − μ₋))`,
+  `b = −w·(μ₊ + μ₋)/2`. The scaling gives unit-std train logits, so the float32 sigmoid does not
+  saturate (unscaled logits reach ±1000 on a residual stream). This
   replaces `directions/`.
 
 **Thresholds** are computed on val, using scores from the **exported numpy `Probe`**, so the
@@ -411,7 +413,7 @@ rests on 2 samples.
    - `group_auroc` (requires `data.group`), for RL-reward probes.
 4. Score test once, on the selected block only.
 5. Run the control: refit on train with shuffled labels, then report AUROC on val with the true
-   labels as `control_auroc`. `controls_passed = control_auroc < 0.6`. Never raise.
+   labels as `control_auroc`. `controls_passed = |control_auroc − 0.5| < 0.1` (an inverted AUROC leaks too). Never raise.
 6. Fit the text baseline on the same splits, a check that the probe beats surface features
    (Wang et al., 2509.03888):
    - Features: lowercase word counts (`re.findall(r"\w+")`) over the window's text, using a
@@ -420,7 +422,8 @@ rests on 2 samples.
      and the last message for `last_turn`.
    - The model is a `LinearProbe` (`pooling: mean`, `keep: pooled`) trained with the same `fit`.
      Its threshold is chosen on val at `max_fpr`, and it is scored on test.
-   - A length-confound baseline also runs: the AUROC of the window's token count. The Silico
+   - A length-confound baseline also runs: the AUROC of the window's word count (the train step
+     has no tokenizer). The Silico
      report's first probe looked strong (AUROC 0.98) but was mostly picking up a confound.
    - `ponytail:` bag-of-words and length only; add TF-IDF or an LLM-judge baseline when a
      recipe needs a stronger bar.
