@@ -193,3 +193,107 @@ def test_last_turn_start_counts_rendered_prefix():
         {"role": "assistant", "content": "yo"},
     ]
     assert probe.last_turn_start(CharTokenizer(), messages) == len("hiA:")
+
+
+def sigmoid(z: float) -> float:
+    return 1.0 / (1.0 + math.exp(-z))
+
+
+def test_serves_refusals():
+    p = make(
+        model_fingerprint="fp",
+        prompt_format="tmpl:x",
+        adapters=("lora-a",),
+    )
+    assert p.serves("fp", None) is None
+    assert p.serves("fp", "lora-a", "tmpl:x") is None
+    refusals = [
+        (make(model_fingerprint=None).serves("fp", None), "no checkpoint"),
+        (p.serves(None, None), "could not be fingerprinted"),
+        (p.serves("other", None), "checkpoint mismatch"),
+        (p.serves("fp", "lora-b"), "adapter"),
+        (p.serves("fp", None, "tmpl:y"), "prompt format mismatch"),
+        (p.serves("fp", None, None), "could not be determined"),
+        (
+            make(model_fingerprint="fp", prompt_format=None).serves(
+                "fp", None, "raw"
+            ),
+            "does not record",
+        ),
+    ]
+    for reason, expected in refusals:
+        assert reason is not None and expected in reason, (reason, expected)
+
+
+def test_vllm_aux_layer_and_backend():
+    assert make(block=3).vllm_aux_layer() == 4
+    assert make().backend() == "hf"
+    assert make(engine="vllm==0.30.0+nnsight==b717807").backend() == "vllm"
+
+
+def test_linear_poolings():
+    logits = [0.0, 6.0, 0.0, 0.0, 3.0, 3.0, 3.0]
+    expected = {"mean": 15 / 7, "last": 3.0, "max": 6.0}
+    for pooling, z in expected.items():
+        p = make(pooling=pooling)
+        assert p.pooled_score_from_logits(logits) == pytest.approx(sigmoid(z))
+    rolling = make(pooling="rolling_mean", rolling_window=3)
+    assert rolling.pooled_score_from_logits(logits) == pytest.approx(
+        sigmoid(3.0)
+    )
+    assert rolling.pooled_score_from_logits([1.0, 2.0]) == pytest.approx(
+        sigmoid(1.5)
+    )
+    assert make().pooled_score_from_logits([-1e9]) == pytest.approx(
+        sigmoid(-30.0)
+    )
+
+
+def test_pooled_score_from_logits_parity():
+    acts = np.random.default_rng(0).normal(size=(7, H)).astype(np.float32)
+    for pooling, window in [
+        ("mean", None),
+        ("last", None),
+        ("max", None),
+        ("rolling_mean", 3),
+        ("rolling_mean", 10),
+    ]:
+        p = make(pooling=pooling, rolling_window=window)
+        score = p.pooled_score(acts)
+        assert score == p.pooled_score_from_logits(p.logits(acts))
+        assert score == pytest.approx(sigmoid(p.pooled_logit(acts)))
+        assert p.flag(acts) == (score >= p.threshold)
+        assert p.pooled_score(acts[0]) == p.pooled_score(acts[:1])
+
+
+def test_attention_pooled_score():
+    p = make(
+        kind="attention",
+        pooling="attention",
+        w=[1.0, 5.0, 0.0, 0.0],
+        q=[math.log(3.0), 0.0, 0.0, 0.0],
+    )
+    acts = np.eye(H, dtype=np.float32)[:2]
+    assert p.pooled_logit(acts) == pytest.approx(0.75 + 1.25 - 0.25)
+    assert p.pooled_score(acts) == pytest.approx(sigmoid(0.75 + 1.25 - 0.25))
+    assert p.pooled_score(acts[0]) == pytest.approx(sigmoid(1.0 - 0.25))
+    with pytest.raises(ValueError):
+        p.logits(acts)
+    with pytest.raises(ValueError):
+        p.pooled_score_from_logits([0.0])
+
+
+def test_escalates():
+    p = make(threshold=0.8, escalate_threshold=0.5)
+    assert p.escalates(0.6)
+    assert not p.escalates(0.4)
+    assert not p.escalates(0.8)
+    assert not make().escalates(0.4)
+
+
+def test_confident_scores_stay_distinct():
+    # Probe logits reach +-40 on real data; float32 rounds sigmoid(17) to 1.0,
+    # which turns the most confident examples into ties at the threshold.
+    p = make(bias=0.0)
+    s = [p.pooled_score_from_logits(np.array([z])) for z in (17.0, 25.0, 33.0)]
+    assert s[0] < s[1] < s[2] < 1.0
