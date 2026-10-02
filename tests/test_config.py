@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import pathlib
+import socket
 
 import pydantic
 import pytest
 import yaml
 
 from sondekit import config
+from sondekit import data
 
 BASE = {
     "name": "t",
@@ -203,3 +205,44 @@ def test_resolve_blocks():
 def test_run_dir():
     cfg = _cfg(output={"dir": "out"})
     assert config.run_dir(cfg) == pathlib.Path("out") / "t"
+
+
+def test_every_shipped_recipe_loads_offline(monkeypatch):
+    def no_network(*args, **kwargs):
+        raise AssertionError("config.load opened a socket")
+
+    monkeypatch.setattr(socket, "socket", no_network)
+    names = sorted(p.stem for p in config.RECIPES_DIR.glob("*.yaml"))
+    assert {"quickstart", "refusal", "high_stakes"} <= set(names)
+    for name in names:
+        assert config.load(name).name == name
+
+
+def test_refusal_recipe_reads_its_labeled_data(monkeypatch):
+    monkeypatch.chdir(pathlib.Path(__file__).parents[1])
+    cfg = config.load("refusal")
+    samples = data.load_samples(cfg.data, cfg.seed)
+    assert len(samples) == 256
+    assert sum(s.label for s in samples) == 35
+    assert len({s.group for s in samples}) == 200
+
+
+def test_high_stakes_scores_full_ood_test_splits():
+    cfg = config.load("high_stakes")
+    srcs = [config.score_data(cfg, e) for e in cfg.score]
+    assert [s.hf_config for s in srcs] == [
+        "anthropic_hh_balanced",
+        "mt_balanced",
+        "toolace_balanced",
+        "mental_health_balanced",
+        "aya_redteaming_balanced",
+    ]
+    assert all(s.hf_split == "test" and s.limit is None for s in srcs)
+    assert all(s.hf == cfg.data.hf and s.text == "inputs" for s in srcs)
+    assert all(s.format == "raw" for s in srcs)
+
+
+def test_gpu_recipes_default_to_hf_while_vllm_is_experimental():
+    for name in ("refusal", "high_stakes"):
+        cfg = config.load(name)
+        assert cfg.model is not None and cfg.model.backend == "hf"

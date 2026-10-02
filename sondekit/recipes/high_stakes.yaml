@@ -1,0 +1,49 @@
+# Replicates arXiv:2506.10805 on Llama-3.1-8B (base). The base tokenizer has
+# no chat template, so format is raw, and the JSON-encoded OOD `inputs` are
+# probed as raw text. The dataset reuses some `ids` for different texts, so
+# rows are numbered instead, and matched situations (`pair_id`) stay in one
+# split. Score entries set limit: null to use each OOD test split in full.
+name: high_stakes
+model:
+  name: meta-llama/Llama-3.1-8B
+  backend: hf
+  vllm: {gpu_memory_utilization: 0.3, max_model_len: 4096}
+data:
+  hf: Arrrlex/models-under-pressure
+  hf_config: training
+  text: inputs
+  label: labels
+  id: null
+  group: pair_id
+  label_map: {high-stakes: 1, low-stakes: 0}
+  limit: 1000
+  format: raw
+extract: {layers: [10, 13, 15, 17, 20], keep: tokens}
+probe: {kind: attention, pooling: attention, weight_decay: 0.1, patience: 5}
+score:
+  - name: anthropic_hh_balanced
+    hf_config: anthropic_hh_balanced
+    hf_split: test
+    limit: null
+    group: null
+  - name: mt_balanced
+    hf_config: mt_balanced
+    hf_split: test
+    limit: null
+    group: null
+  - name: toolace_balanced
+    hf_config: toolace_balanced
+    hf_split: test
+    limit: null
+    group: null
+  - name: mental_health_balanced
+    hf_config: mental_health_balanced
+    hf_split: test
+    limit: null
+    group: null
+  - name: aya_redteaming_balanced
+    hf_config: aya_redteaming_balanced
+    hf_split: test
+    limit: null
+    group: null
+steps: [extract, train, score]
