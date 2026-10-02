@@ -78,6 +78,25 @@ def extract_to(
     )
 
 
+def disk_bytes(
+    encoded: list[data.Encoded],
+    keep: str,
+    hidden: int,
+    n_blocks: int,
+    dtype: str,
+) -> int:
+    """Bytes extract writes: window tokens x H x blocks x dtype size.
+
+    A pooled sample counts as one token.
+    """
+    rows = (
+        len(encoded)
+        if keep == "pooled"
+        else sum(e.span[1] - e.span[0] for e in encoded)
+    )
+    return rows * hidden * n_blocks * getattr(torch, dtype).itemsize
+
+
 def run(cfg: config.RunConfig, run_dir: pathlib.Path) -> None:
     """The extract step: writes `run_dir/extract/`.
 
@@ -98,13 +117,7 @@ def run(cfg: config.RunConfig, run_dir: pathlib.Path) -> None:
     blocks = config.resolve_blocks(ext.layers, loaded.num_layers)
     window, keep = ext.window, ext.keep
     encoded, drops = data.encode_all(samples, src, window, loaded.tokenizer)
-    tokens = (
-        sum(e.span[1] - e.span[0] for e in encoded)
-        if keep == "tokens"
-        else len(encoded)
-    )
-    size = tokens * loaded.hidden * len(blocks)
-    size *= getattr(torch, model.dtype).itemsize
+    size = disk_bytes(encoded, keep, loaded.hidden, len(blocks), model.dtype)
     logger.info(
         "extract: %d samples x %d blocks, ~%.2f GB",
         len(encoded),
