@@ -255,12 +255,20 @@ def load(source: str, overrides: Sequence[str] = ()) -> RunConfig:
         pydantic.ValidationError: On any schema or cross-field violation.
     """
     path = pathlib.Path(source)
-    if path.suffix not in (".yaml", ".yml"):
+    bundled = path.suffix not in (".yaml", ".yml")
+    if bundled:
         path = RECIPES_DIR / f"{source}.yaml"
         if not path.is_file():
             names = sorted(p.stem for p in RECIPES_DIR.glob("*.yaml"))
             raise ValueError(f"unknown recipe {source!r}; available: {names}")
     raw = yaml.safe_load(path.read_text()) or {}
+    if bundled:
+        # So `sondekit run quickstart` works from any cwd. A path missing from
+        # RECIPES_DIR stays cwd-relative, as in user configs.
+        for src in [raw.get("data") or {}, *(raw.get("score") or [])]:
+            rel = src.get("path")
+            if rel and (RECIPES_DIR / rel).is_file():
+                src["path"] = str(RECIPES_DIR / rel)
     for item in overrides:
         apply_override(raw, item)
     return RunConfig.model_validate(raw)
