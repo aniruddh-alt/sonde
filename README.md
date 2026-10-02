@@ -73,7 +73,8 @@ sondekit run my-probe.yaml -o probe.epochs=50 -o "extract.layers=[4, 8]"
 ```
 
 Besides `extract` and `train`, a run can `score` other datasets with the
-trained probe. [docs/configuration.md](docs/configuration.md) lists every
+trained probe, `generate` model responses, and `steer` generation along the
+probe direction. [docs/configuration.md](https://github.com/aniruddh-alt/sondekit/blob/main/docs/configuration.md) lists every
 option.
 
 ## Recipes

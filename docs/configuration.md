@@ -12,6 +12,8 @@ the command line with `-o key=value`, for example
 | `extract` | saves residual-stream activations to `extract/` | `model`, `data`, `extract`, and `probe` when `keep: pooled` |
 | `train` | fits one probe per layer and keeps the best | `data`, `probe` |
 | `score` | applies a probe to other datasets | `model`, `data`, `score` |
+| `generate` | samples model responses into `generations.jsonl` | `model`, `data`, `generate` |
+| `steer` | generates while adding or removing the probe direction | `model`, `data`, `generate`, `steer` |
 
 ## Options
 
@@ -19,7 +21,7 @@ the command line with `-o key=value`, for example
 |---|---|---|
 | `name` | required | run directory is `<output.dir>/<name>` |
 | `seed` | `0` | drives subsampling, splits, initialization and data order |
-| `steps` | `[extract, train]` | any of `extract`, `train`, `score` |
+| `steps` | `[extract, train]` | any of `generate`, `extract`, `train`, `score`, `steer` |
 | `model.name` | required | Hugging Face id or local path |
 | `model.revision` | `null` | recorded in the probe's fingerprint |
 | `model.dtype` | `bfloat16` | activations are stored in this dtype |
@@ -51,6 +53,9 @@ the command line with `-o key=value`, for example
 | `probe.max_fpr` | `0.01` | the threshold is the lowest one with validation FPR at or below this; `null` uses best F1 |
 | `probe.select` | `recall_at_fpr` | how the layer is chosen: `recall_at_fpr`, `auroc`, or `group_auroc` (needs `data.group`) |
 | `score` | `[]` | list of `{name, probe, <any data key>}`; unset keys come from `data` |
+| `generate.max_tokens`, `generate.temperature`, `generate.top_p` | `256`, `0.7`, `1.0` | `temperature: 0` is greedy |
+| `steer.probe` | `null` | defaults to this run's probe |
+| `steer.mode`, `steer.strengths` | `add`, `[0.0]` | `add` adds `s·v`; `ablate` removes `s` times the projection on `v`; strength 0 is the baseline |
 | `output.dir`, `output.overwrite` | `runs`, `false` | |
 
 The config is checked when it loads. Unknown keys and invalid combinations
@@ -69,6 +74,8 @@ runs/<name>/
   layers/B<layer>.npz      the probe trained at each layer
   metrics.json             headline, per-layer validation table, test, baselines, control
   score/<entry>/           scores.jsonl and metrics.json
+  generations.jsonl        generated responses with their token ids
+  steer/s<strength>.jsonl  steered generations, one file per strength
 ```
 
 `metrics.json["headline"]` reports, on the test split, recall at `max_fpr`
@@ -84,7 +91,9 @@ Running the same config again continues where it stopped:
 
 - `extract` resumes from its last complete shard. If the model, data or
   extraction settings changed, it stops before loading the model.
-- `train` and `score` overwrite their outputs.
+- `generate` skips rows that are already in `generations.jsonl`, and stops
+  if the model, data, generation settings or seed changed.
+- `train`, `score` and `steer` overwrite their outputs.
 
 Set `output.overwrite: true` to start a run over.
 

@@ -4,8 +4,6 @@ All notable changes to `sondekit` are documented here. The format loosely follow
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and the
 API may change between minor versions.
 
-## [Unreleased]
-
 ## [0.2.0] - Unreleased
 
 A rewrite; nothing from 0.1 stays compatible. 0.1 is preserved at the git
@@ -29,6 +27,9 @@ PyPI.
   rank and group AUROC, a shuffled-label control, and bag-of-words and
   length baselines.
 - Recipes: `quickstart`, `refusal`, `high_stakes`.
+- `generate` (resumable `generations.jsonl` with exact `response_ids`) and
+  `steer` (add / ablate at every decode step, one file per strength), on
+  the `hf` backend.
 
 ### Fixed
 - Activations at batch size > 1 were corrupted by padding without an
