@@ -1,68 +1,74 @@
 # Contributing to sonde
 
-Thanks for wanting to poke at the hidden layers with us. This guide covers the short loop for getting a change merged.
-
 ## Dev setup
-
-sonde uses [uv](https://docs.astral.sh/uv/) for environment management.
 
 ```bash
 git clone https://github.com/aniruddh-alt/sonde.git
 cd sonde
-uv venv
-uv pip install -e ".[dev]"
+uv sync --extra hf --extra dev
+uvx pre-commit install   # optional: ruff on every commit
 ```
 
-Optional — enable pre-commit hooks so lint/format run on every commit:
-
-```bash
-uv pip install pre-commit
-pre-commit install
-```
+GPU work happens on the DGX Spark in two venvs (`.venv-hf` and `.venv-vllm`);
+see the README.
 
 ## The inner loop
 
+CI runs the same checks, with ruff in check-only mode:
+
 ```bash
-# format + lint
-ruff format .
-ruff check --fix .
-
-# type check
-pyright
-
-# tests
-pytest
+uv run ruff format .
+uv run ruff check --fix .
+uv run pyright
+uv run pytest -m "not gpu"
 ```
 
-CI runs all four on every PR. Keep them green locally before pushing.
+Tests that need a CUDA GPU carry `@pytest.mark.gpu`. Run them on the Spark
+with `pytest -m gpu`. Skip a test by its marker, never by catching an
+exception.
 
 ## Style
 
-- **Ruff** handles formatting and lint. Config lives in `pyproject.toml` under `[tool.ruff]`. Don't fight the formatter.
-- **Pyright** runs in `basic` mode. Add type hints on public APIs (anything exported from a package `__init__.py`).
-- **Imports**: ruff's isort rule groups them. First-party packages are declared in `pyproject.toml`.
-- **Tests**: put new tests in `tests/` mirroring the package layout. Prefer small, focused tests over large end-to-end ones.
+We follow the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html):
+- 80 columns.
+- `import module` or `from package import module`, never imported names
+  (`typing` and `collections.abc` are the exceptions). In tests too: write
+  `from sonde import probe`, then `probe.Probe(...)`.
+- `from __future__ import annotations` at the top of every module.
+- Args / Returns / Raises docstrings on public functions, giving array
+  shapes.
+- No comments that restate the code. Mark a deliberate shortcut with
+  `# ponytail:` and name its limit.
+- Tests use plain asserts and few fixtures.
 
-## Commit + PR flow
+`sonde/probe.py` and `sonde/fingerprint.py` must import only numpy and the
+stdlib; `tests/test_probe.py` enforces this. mechanica imports them inside
+vLLM workers.
 
-1. Branch off `main`: `git checkout -b <kind>/<short-slug>` (kinds: `feat`, `fix`, `chore`, `docs`, `refactor`).
-2. Keep commits atomic — one logical change each. Conventional-commit-style messages are appreciated but not enforced.
-3. Open a PR against `main`. Describe **what** changed and **why**; link any related issue.
-4. Make sure CI passes. Address review comments with follow-up commits (don't force-push after review has started unless asked).
+## Common changes
 
-## Adding a new probe architecture
+**A new pooling or probe kind.** Change both halves together:
+- the numpy scoring in `sonde/probe.py`;
+- the torch module in `sonde/probes.py`;
+- the parity case in `tests/test_probes.py`, which asserts that
+  `Probe.pooled_score == sigmoid(module(x))` within 1e-5.
 
-1. Subclass `BaseProbe` in `sonde/probes/architectures/`.
-2. Register it in `sonde/probes/architectures/__init__.py`.
-3. Add a test in `tests/test_probe_architectures.py` — at minimum, verify it trains and returns metrics on a trivial 2-class dataset.
+**A new vLLM architecture.** Add its decoder-layer class to the allowlist in
+`sonde/backends.py` only after you check in vLLM's source that the layer
+returns `(mlp_out, residual)`. Record that check in the PR.
 
-## Adding a new activation target
+**A new recipe.** Add `sonde/recipes/<name>.yaml` with `name: <name>`.
+`tests/test_config.py` loads every recipe offline.
 
-Activation targets are parsed in `sonde/activation/`. When adding a new selector syntax or module-hook kind:
+## Commits and PRs
 
-1. Update the parser + the docstring / README selector table.
-2. Cover the new syntax in `tests/test_activation_extractor.py` or a sibling test file.
+Branch off `main`, keep commits atomic, and open a PR that says what changed
+and why. CI must be green before merge.
 
 ## Reporting bugs
 
-Open an issue with: model + revision you were probing, a minimal config or snippet, and the traceback or unexpected output. Reproducibility beats thoroughness.
+Open an issue with:
+- the model and revision;
+- the config (`runs/<name>/config.yaml`);
+- the backend and `engine` string;
+- the traceback.
