@@ -44,7 +44,7 @@ A probe is just a tensor $W \in \mathbb{R}^{C \times d}$ (plus optional bias). T
                 p(y = 1 | h)   ∈  [0, 1]
 ```
 
-- **Input:** activation $h_{L,t} \in \mathbb{R}^d$ at (layer $L$, token position $t$) for a single forward pass. For Qwen-0.5B, $d \approx 896$; for Llama-3-70B, $d = 8192$.
+- **Input:** activation $h_{L,t} \in \mathbb{R}^d$ at (layer $L$, token position $t$) for a single forward pass. For Qwen2.5-0.5B, $d = 896$; for Llama-3-70B, $d = 8192$.
 - **Output:** scalar probability (binary), softmax over $C$ classes, or a continuous target (e.g., structural-probe tree distance, latitude).
 - **Implicit geometric claim:** there exists a hyperplane $\{h : w^\top h + b = 0\}$ that separates the concept. The direction $w/\|w\|$ doubles as a **concept vector** for steering and causal interventions.
 
@@ -54,11 +54,11 @@ All are linear in $h$; they differ in objective and assumptions.
 
 | Variant | Objective | Notes |
 |---|---|---|
-| **Logistic regression** | cross-entropy on $\sigma(w^\top h + b)$ | default in interp; calibrated probabilities |
+| **Logistic regression** | cross-entropy on $\sigma(w^\top h + b)$ | default in interp; calibrated only on the training distribution and only without class weighting (sondekit trains with `pos_weight`, so read scores against the val-chosen threshold) |
 | **Linear SVM** | hinge loss | max-margin; robust to outliers |
 | **Ridge regression** | $\|y - Wh\|_2^2 + \lambda\|W\|_F^2$ | closed form; used for continuous targets |
 | **Difference of means (DoM)** | $w = \mu_+ - \mu_-$, threshold at midpoint | no optimization; preferred for steering |
-| **LDA / Fisher** | $w \propto \Sigma^{-1}(\mu_+ - \mu_-)$ | Bayes-optimal under shared $\Sigma$ |
+| **LDA / Fisher** | $w \propto \Sigma^{-1}(\mu_+ - \mu_-)$ | Bayes-optimal for Gaussian classes with shared $\Sigma$ |
 | **Structural probe** | PSD metric $A = B^\top B$ over tree-distance | recovers parse trees (Hewitt & Manning 2019) |
 
 ### 2.3 Design Choices
@@ -76,7 +76,7 @@ All are linear in $h$; they differ in objective and assumptions.
 - **Base model frozen.** Activations are extracted once and cached (often as safetensors). Probes measure what is *already* present, not what gradient descent can cram in.
 - **Small data.** Typical $N \in [10^3, 10^5]$. Because the probe is linear and $N \ll$ pretraining, overfitting dominates — strong $\ell_2$ regularization is standard.
 - **Selection via held-out set.** Sweeping (layer × position × weight-decay) inflates effective capacity; always keep a final test split untouched.
-- **Better metrics than accuracy.** [MDL probing](https://arxiv.org/abs/2003.12298) (Voita & Titov 2020) and V-information (Hewitt et al. 2021) account for probe capacity; **selectivity** against random-label control tasks ([Hewitt & Liang 2019](https://arxiv.org/abs/1909.03368)) isolates representation content from probe memorization.
+- **Better metrics than accuracy.** [MDL probing](https://arxiv.org/abs/2003.12298) (Voita & Titov 2020) and conditional $\mathcal{V}$-information ([Hewitt et al. 2021](https://arxiv.org/abs/2109.09234)) account for probe capacity; **selectivity** against random-label control tasks ([Hewitt & Liang 2019](https://arxiv.org/abs/1909.03368)) isolates representation content from probe memorization.
 
 ---
 
@@ -124,7 +124,7 @@ The same logic applies to deception, sycophancy, and scheming probes: if the pro
 
 ### 4.4 Layerwise Probing
 
-A sweep over layers is cheap insurance. [Tenney et al. (2019)](https://arxiv.org/abs/1905.05950) showed BERT "rediscovers the classical NLP pipeline": POS in layers ~3-4, parsing/NER in ~5-8, semantic roles in ~9-11, coreference at the top. Modern decoder-only LLMs show the same depth profile for semantic features. *Flat* probe-accuracy curves suggest a feature is present at the input and merely propagated; sharp *late-layer peaks* suggest genuine in-network computation.
+A sweep over layers is cheap insurance. [Tenney et al. (2019)](https://arxiv.org/abs/1905.05950) showed BERT "rediscovers the classical NLP pipeline": in BERT-large (24 layers) the regions that matter for each task appear in the order POS tagging, parsing, NER, semantic roles, then coreference. The ordering is the finding; the regions overlap, and the paper makes no claim about decoder-only LLMs. *Flat* probe-accuracy curves suggest a feature is present at the input and merely propagated; sharp *late-layer peaks* suggest genuine in-network computation.
 
 ---
 
@@ -133,13 +133,13 @@ A sweep over layers is cheap insurance. [Tenney et al. (2019)](https://arxiv.org
 ### 5.1 [Marks & Tegmark (2023) — The Geometry of Truth](https://arxiv.org/abs/2310.06824)
 
 - **Problem.** Are "truth" probe directions *causally* load-bearing, or merely correlational? Do different probe methods find the same direction?
-- **Method.** Curate clean true/false factual datasets; compare logistic regression, mass-mean (DoM), and PCA probes on Llama-2 residual streams; perform causal interventions by adding/subtracting the direction.
-- **Findings.** DoM generalizes as well as or better than LR across topics. Probes transfer across factual domains → shared truth representation. Intervention flips the model's downstream judgments, establishing causation. Middle-to-late layers separate true vs false cleanly.
+- **Method.** Curate clean true/false factual datasets; compare logistic regression, mass-mean (DoM) and CCS probes on LLaMA-2-7B/13B/70B residual streams (PCA is used only to visualise); perform causal interventions by adding/subtracting the direction.
+- **Findings.** Mass-mean probes generalise about as well as LR and CCS, and their directions are the most causally implicated (MM beats LR and CCS in 7 of 8 intervention settings). Probes transfer across factual domains → shared truth representation. Intervention flips the model's downstream judgments, establishing causation. Middle-to-late layers separate true vs false cleanly.
 
 ### 5.2 [Li et al. (2023) — Inference-Time Intervention (ITI)](https://arxiv.org/abs/2306.03341)
 
 - **Problem.** LLMs often "know" the right answer but output falsehoods (hallucination, sycophancy). Can we steer truthfulness without fine-tuning?
-- **Method.** Train per-head linear probes on TruthfulQA-style contrasts. Rank heads by probe accuracy. At inference, shift top-$K$ heads along the probe direction by a coefficient $\alpha$.
+- **Method.** Train per-head linear probes on TruthfulQA-style contrasts. Rank heads by probe accuracy. At inference, shift the top-$K$ heads by $\alpha$ along the mass-mean shift (the class-mean difference), which beat the probe-weight direction in their ablation (42.3% vs 34.8% true*informative).
 - **Findings.** TruthfulQA truthfulness on LLaMA-Alpaca from 32.5% → 65.1%. Truth signal is sparsely localized in a few heads. Hundreds of labeled examples suffice. Popularized activation steering as a cheap alignment tool.
 
 ### 5.3 [Burns et al. (2022) — Contrast-Consistent Search (CCS)](https://arxiv.org/abs/2212.03827)
@@ -188,9 +188,9 @@ $$h' = h - (\tilde{w}^\top h)\, \tilde{w}$$
 
 [Arditi et al. (2024)](https://arxiv.org/abs/2406.11717) even bake this into the weights via **weight orthogonalization** — projecting every matrix that writes to the residual stream to have no component along the refusal direction.
 
-### 6.2 Difference-of-Means Is Near-Optimal
+### 6.2 Why Difference-of-Means Steers Well
 
-Under shared class covariance $\Sigma$, the Bayes-optimal linear classifier is Fisher's direction $w^* = \Sigma^{-1}(\mu_+ - \mu_-)$. Logistic regression approximates this *but* is pulled toward any axis that gives low-noise separability — including axes merely *correlated* with the feature. The raw DoM $\mu_+ - \mu_-$ is unbiased for the *causal* feature direction when the label is generated by the feature. This is why [Marks & Tegmark](https://arxiv.org/abs/2310.06824) argue DoM generalizes and steers better than LR despite being a weaker classifier.
+For Gaussian classes with shared covariance $\Sigma$, the Bayes-optimal linear classifier is Fisher's direction $w^* = \Sigma^{-1}(\mu_+ - \mu_-)$. DoM equals it only when $\Sigma \propto I$, so DoM is usually the weaker classifier. Logistic regression is pulled toward any axis that gives low-noise separability, including axes merely *correlated* with the feature. DoM ignores $\Sigma$ and points where the class means actually differ, which is what an intervention moves. Empirically, [Marks & Tegmark](https://arxiv.org/abs/2310.06824) find mass-mean directions more causally implicated than LR directions at similar accuracy, and [ITI](https://arxiv.org/abs/2306.03341) steers best along the mass-mean shift.
 
 ### 6.3 Probe Direction ≠ Feature Direction
 
@@ -208,8 +208,8 @@ A probe's success is *observational* evidence: the feature is linearly decodable
 ### 6.5 Relevant Steering Methods
 
 - [**ActAdd** (Turner et al. 2023)](https://arxiv.org/abs/2308.10248) — steer from contrasting *prompt pairs* alone; no optimization.
-- [**CAA** (Panickssery, Rimsky et al. 2023)](https://arxiv.org/abs/2312.06681) — Contrastive Activation Addition, averaging DoM over many (positive, negative) behavior pairs.
-- [**LEACE** (Belrose et al. 2023)](https://arxiv.org/abs/2306.03819) — closed-form optimal linear concept erasure via mean-difference subspaces.
+- [**CAA** (Panickssery et al. 2023)](https://arxiv.org/abs/2312.06681) — Contrastive Activation Addition, averaging DoM over many (positive, negative) behavior pairs.
+- [**LEACE** (Belrose et al. 2023)](https://arxiv.org/abs/2306.03819) — closed-form erasure that provably stops every linear classifier from detecting a concept while changing the representation as little as possible.
 
 ---
 
@@ -221,28 +221,24 @@ Linear probes have become the leading runtime monitoring technique: a single dot
 
 **Sleeper-agent / deception detection.**
 - [MacDiarmid et al. (Anthropic, 2024) — *Simple probes can catch sleeper agents*](https://www.anthropic.com/research/probes-catch-sleeper-agents). Probes trained on a crude "Are you helpful? Yes/No" contrast pair catch behavioral defection in sleeper-agent models at AUROC > 99%, even without knowing the trigger. Defection is linearly legible across wide bands of middle layers.
-- [Goldowsky-Dill et al. (Apollo Research, 2025)](https://arxiv.org/abs/2502.03407). Deception probes on Llama-3.3-70B-Instruct: AUROC 0.96-0.999 on held-out scenarios (insider-trading concealment, sandbagging). Catch 95-99% of deceptive responses at 1% FPR — still insufficient as a robust defense, but a strong baseline.
+- [Goldowsky-Dill et al. (Apollo Research, 2025)](https://arxiv.org/abs/2502.03407). Deception probes on Llama-3.3-70B-Instruct: AUROC 0.96-0.999 on held-out scenarios (insider-trading concealment, sandbagging). Catch 95-99% of deceptive responses at a threshold set for 1% FPR on unrelated control chat data — still insufficient as a robust defense, but a strong baseline.
 
 **Hallucination / truthfulness.**
 - [Azaria & Mitchell (2023) — SAPLMA](https://arxiv.org/abs/2304.13734). Classifier over hidden activations predicts statement truth at 71-83% accuracy, above token-probability baselines confounded by length and frequency.
-- [Kadavath et al. (2022) — *Language Models (Mostly) Know What They Know*](https://arxiv.org/abs/2207.05221). P(True) and P(IK) probes; large models well-calibrated under correct formatting. Underpins "I don't know" routing in RAG stacks.
-- Real-time hallucination probes stream entity-level fabrication scores during generation at AUC > 0.85.
+- [Kadavath et al. (2022) — *Language Models (Mostly) Know What They Know*](https://arxiv.org/abs/2207.05221). P(True) is the model's own probability that a proposed answer is true; P(IK) comes from a head fine-tuned with the model, so neither is a probe on frozen activations. Large models are well calibrated on multiple-choice and true/false questions in the right format.
 
 **Harmfulness / jailbreak.**
-- [RepE (Zou et al. 2023)](https://arxiv.org/abs/2310.01405) harmfulness probes from single contrast pairs. Refusal probes (Arditi et al.) separate harmful from harmless prompts at AUROC > 0.99 on Llama-2/3 chat.
-
-**Concept-specific monitors.**
-- Power-seeking, scheming, self-preservation probes. Used as *training-run canaries*: watch a probe score during fine-tuning and halt when the concept's norm rises (motivated by "emergent misalignment" work).
+- [RepE (Zou et al. 2023)](https://arxiv.org/abs/2310.01405) harmfulness probes from single contrast pairs.
 
 ### 7.2 Feature Discovery
 
 Used as a scientific instrument, probes answer *what does this model know?*
 
-**Sparse neuron-level features.** [Gurnee et al.](https://arxiv.org/abs/2305.01610) found dedicated monosemantic neurons for French text, code, base64, all-caps, and compound words in Pythia/OPT middle layers.
+**Sparse neuron-level features.** [Gurnee et al.](https://arxiv.org/abs/2305.01610) found dedicated monosemantic neurons for French text, code, base64, all-caps, and compound words in Pythia middle layers.
 
-**World models.** [Li et al. *Emergent World Representations* (ICLR 2023 oral)](https://arxiv.org/abs/2210.13382). OthelloGPT probed for board state: reparameterized ("my color" vs "opponent color") linear probes recover per-square state; intervening on probe-identified directions causally flips predicted legal moves. Probes don't just *read* a world model — they identify the one the network *uses*.
+**World models.** [Li et al. *Emergent World Representations* (ICLR 2023)](https://arxiv.org/abs/2210.13382) recovered OthelloGPT's board state with *nonlinear* (MLP) probes, and intervening on the probed representation flips predicted legal moves. [Nanda, Lee & Wattenberg (2023)](https://arxiv.org/abs/2309.00941) then showed the state is *linear* once squares are read as "mine" vs "theirs" instead of black vs white. Probes don't just *read* a world model — they identify the one the network *uses*.
 
-**Spatial and temporal structure.** [Gurnee & Tegmark (2023) — *Language Models Represent Space and Time*](https://arxiv.org/abs/2310.02207). Ridge probes recover latitude/longitude and dates from Llama-2 activations linearly, with $R^2$ rising monotonically with depth and scale. Individual "space neurons" and "time neurons" encode coordinates directly.
+**Spatial and temporal structure.** [Gurnee & Tegmark (2023) — *Language Models Represent Space and Time*](https://arxiv.org/abs/2310.02207). Ridge probes recover latitude/longitude and dates from Llama-2 activations linearly, with $R^2$ rising through the first half of the layers, plateauing near the middle, and higher in larger models. Individual "space neurons" and "time neurons" encode coordinates directly.
 
 **Layerwise pipeline discovery.** [Tenney et al. (2019)](https://arxiv.org/abs/1905.05950) used edge-probing scalar-mixing weights to show BERT rediscovers the classical NLP pipeline across depth.
 
@@ -288,6 +284,7 @@ Foundational:
 - Hewitt & Liang (2019). *Designing and Interpreting Probes with Control Tasks*. [arXiv:1909.03368](https://arxiv.org/abs/1909.03368)
 - Tenney et al. (2019). *BERT Rediscovers the Classical NLP Pipeline*. [arXiv:1905.05950](https://arxiv.org/abs/1905.05950)
 - Belinkov (2022). *Probing Classifiers: Promises, Shortcomings, and Advances*. [arXiv:2102.12452](https://arxiv.org/abs/2102.12452)
+- Hewitt et al. (2021). *Conditional probing: measuring usable information beyond a baseline*. [arXiv:2109.09234](https://arxiv.org/abs/2109.09234)
 
 Modern LLM probing:
 - Burns et al. (2022). *Discovering Latent Knowledge Without Supervision (CCS)*. [arXiv:2212.03827](https://arxiv.org/abs/2212.03827)
@@ -301,13 +298,14 @@ Modern LLM probing:
 Steering and erasure:
 - Subramani, Suresh & Peters (2022). *Extracting Latent Steering Vectors*. [arXiv:2205.05124](https://arxiv.org/abs/2205.05124)
 - Turner et al. (2023). *Activation Addition (ActAdd)*. [arXiv:2308.10248](https://arxiv.org/abs/2308.10248)
-- Panickssery, Rimsky et al. (2023). *Contrastive Activation Addition (CAA)*. [arXiv:2312.06681](https://arxiv.org/abs/2312.06681)
+- Panickssery et al. (2023). *Contrastive Activation Addition (CAA)*. [arXiv:2312.06681](https://arxiv.org/abs/2312.06681)
 - Belrose et al. (2023). *LEACE: Perfect linear concept erasure in closed form*. [arXiv:2306.03819](https://arxiv.org/abs/2306.03819)
 
 Applications:
 - Kadavath et al. (2022). *Language Models (Mostly) Know What They Know*. [arXiv:2207.05221](https://arxiv.org/abs/2207.05221)
 - Azaria & Mitchell (2023). *The Internal State of an LLM Knows When It's Lying (SAPLMA)*. [arXiv:2304.13734](https://arxiv.org/abs/2304.13734)
 - Li et al. (2023). *Emergent World Representations (OthelloGPT)*. [arXiv:2210.13382](https://arxiv.org/abs/2210.13382)
+- Nanda, Lee & Wattenberg (2023). *Emergent Linear Representations in World Models of Self-Supervised Sequence Models*. [arXiv:2309.00941](https://arxiv.org/abs/2309.00941)
 - Gurnee & Tegmark (2023). *Language Models Represent Space and Time*. [arXiv:2310.02207](https://arxiv.org/abs/2310.02207)
 - MacDiarmid et al. (Anthropic, 2024). *Simple probes can catch sleeper agents*. [Anthropic blog](https://www.anthropic.com/research/probes-catch-sleeper-agents)
 - Mallen & Belrose (2023). *Eliciting Latent Knowledge from Quirky Language Models*. [arXiv:2312.01037](https://arxiv.org/abs/2312.01037)
