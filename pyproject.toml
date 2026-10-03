@@ -24,7 +24,8 @@ hf = [
 ]
 vllm = [
     "sonde[core]",
-    "vllm==0.27.1; sys_platform == 'linux'",
+    "vllm==0.30.0; sys_platform == 'linux'",
+    "ninja; sys_platform == 'linux'",
     "nnsight[vllm] @ git+https://github.com/ndif-team/nnsight@b71780727ea9713f74ce12f76b1d3548b91a74a0 ; sys_platform == 'linux'",
 ]
 dev = ["pytest==9.1.1", "ruff==0.16.10", "pyright==1.1.414"]
@@ -75,7 +76,6 @@ extend-exclude = ["sonde/fingerprint.py", "*.md"]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sonde"]
 force-single-line = true
 
 [tool.pyright]
