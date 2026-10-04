@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from importlib import metadata
 from typing import Any
 
@@ -37,14 +38,14 @@ def load_model(cfg: config.ModelConfig) -> Loaded:
         The loaded model, tokenizer and shape facts.
 
     Raises:
-        NotImplementedError: For `backend: vllm`, which is not implemented yet.
+        ValueError: For `backend: vllm`, a decoder layer outside the
+            allowlist.
     """
     key = cfg.model_dump_json()
     if key not in _cache:
-        if cfg.backend != "hf":
-            raise NotImplementedError("the vllm backend is not implemented yet")
         _cache.clear()
-        _cache[key] = _load_hf(cfg)
+        load = _load_vllm if cfg.backend == "vllm" else _load_hf
+        _cache[key] = load(cfg)
     return _cache[key]
 
 
@@ -67,6 +68,65 @@ def _load_hf(cfg: config.ModelConfig) -> Loaded:
         model.num_layers,
         model.hidden_size,
         engine,
+    )
+
+
+_VLLM_LAYERS = frozenset(
+    {
+        "LlamaDecoderLayer",
+        "MistralDecoderLayer",
+        "Qwen2DecoderLayer",
+        "Qwen3DecoderLayer",
+    }
+)
+
+
+def _nnsight_ref() -> str:
+    dist = metadata.distribution("nnsight")
+    url = json.loads(dist.read_text("direct_url.json") or "{}")
+    commit = url.get("vcs_info", {}).get("commit_id")
+    return commit[:7] if commit else dist.version
+
+
+def _load_vllm(cfg: config.ModelConfig) -> Loaded:
+    """Builds an eager nnsight VLLM engine for an allowlisted architecture.
+
+    The meta tree is checked before dispatch, so a refused model never
+    allocates GPU memory.
+    """
+    import vllm  # pyright: ignore[reportMissingImports]
+    from nnsight.modeling import vllm as nnsight_vllm
+
+    model = nnsight_vllm.VLLM(
+        cfg.name,
+        revision=cfg.revision,
+        dtype=cfg.dtype,
+        enable_prefix_caching=False,
+        enable_chunked_prefill=False,
+        **cfg.vllm,
+    )
+    root = model._module
+    layers = getattr(getattr(root, "model", None), "layers", ())
+    kinds = {type(layer).__name__ for layer in layers}
+    if not kinds or not kinds <= _VLLM_LAYERS:
+        found = sorted(kinds) or type(root).__name__
+        raise ValueError(
+            f"{cfg.name}: vLLM decoder layers {found} are not in "
+            f"{sorted(_VLLM_LAYERS)}, whose output is (mlp_out, residual)"
+        )
+    model.dispatch()
+    hf = transformers.AutoConfig.from_pretrained(
+        cfg.name, revision=cfg.revision
+    )
+    return Loaded(
+        backend="vllm",
+        model=model,
+        tokenizer=transformers.AutoTokenizer.from_pretrained(
+            cfg.name, revision=cfg.revision
+        ),
+        num_layers=hf.num_hidden_layers,
+        hidden=hf.hidden_size,
+        engine=f"vllm=={vllm.__version__}+nnsight=={_nnsight_ref()}",
     )
 
 

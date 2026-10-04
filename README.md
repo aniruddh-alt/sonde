@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/img/hero.svg" alt="A probe descending through transformer layers" width="100%"/>
+  <img src="https://raw.githubusercontent.com/aniruddh-alt/sondekit/main/docs/img/hero.svg" alt="A probe descending through transformer layers" width="100%"/>
 </p>
 
 <h1 align="center">sondekit</h1>
@@ -111,8 +111,15 @@ uses these files to score live vLLM traffic.
 
 ## GPU backends
 
-The `hf` backend runs on any GPU through nnterp, and the recipes use it.
-A `vllm` backend is in progress.
+The default `hf` backend runs on any GPU through nnterp. The `vllm` backend
+is experimental: model loading works, but extraction and generation on vLLM
+are not finished, so the recipes use `hf`. The `hf` and `vllm` extras
+conflict, so each gets its own environment:
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv-hf uv sync --locked --extra hf
+UV_PROJECT_ENVIRONMENT=.venv-vllm uv sync --locked --extra vllm
+```
 
 ## Learn more
 
