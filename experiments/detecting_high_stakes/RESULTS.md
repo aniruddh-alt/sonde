@@ -77,20 +77,19 @@ Probe trained on 1K synthetic samples, evaluated on 5 external datasets it has n
 ## How to Run
 
 ```bash
-# On Lambda K8s cluster (needs 1x H100, ~15 min total)
-kubectl apply -f experiments/models_under_pressure/k8s_job.yaml
-
-# Or locally with a GPU
-PYTHONPATH=. python experiments/models_under_pressure/run_pipeline.py
+sonde run high_stakes   # .venv-hf; the vllm backend is experimental
 ```
 
-The pipeline:
-1. Loads `Arrrlex/models-under-pressure` training split (stratified subsample)
-2. Extracts full-sequence activations from Llama 3.1 8B at 5 middle layers
-3. Trains attention probes per layer, selects best by validation AUROC
-4. Runs control experiments (shuffled labels, random features)
-5. Evaluates best probe on 5 OOD datasets
-6. Saves probe weights to `data/best_probe.pt`
+The recipe (`sonde/recipes/high_stakes.yaml`):
+1. Loads a seeded 1,000-row subsample of `Arrrlex/models-under-pressure` (`training`).
+2. Extracts every token of the raw (untemplated) input at blocks 10, 13, 15, 17 and 20 of Llama-3.1-8B.
+3. Fits one attention probe per block and selects by validation recall at 1% FPR (validation AUROC when val has too few negatives for 1% FPR).
+4. Records a shuffled-label control.
+5. Scores the selected probe on the five `*_balanced` OOD test splits.
+6. Writes `runs/high_stakes/probes/high_stakes.npz` plus `metrics.json` and `score/*/metrics.json`.
+
+The numbers above were produced by sonde v0.1 (tag `v0.1-legacy`) at batch
+size 1. They have not yet been reproduced with the current pipeline.
 
 ## Key Takeaways
 
@@ -103,4 +102,4 @@ The pipeline:
 
 - [Detecting High-Stakes Interactions with Activation Probes](https://arxiv.org/abs/2506.10805) (2506.10805)
 - [Dataset: Arrrlex/models-under-pressure](https://huggingface.co/datasets/Arrrlex/models-under-pressure)
-- Research gaps and extensions: [`docs/research_gaps_and_extensions.md`](../../docs/research_gaps_and_extensions.md)
+- Open extensions: [spec §17](../../docs/superpowers/specs/2026-10-02-sonde-redesign-design.md#17-deferred-add-when-a-config-needs-it)

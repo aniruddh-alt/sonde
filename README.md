@@ -5,228 +5,227 @@
 <h1 align="center">sonde</h1>
 
 <p align="center">
-  <em>A slender probe cast into the hidden layers of a large model, to report back what it finds.</em>
-</p>
-
-<p align="center">
   <a href="https://github.com/aniruddh-alt/sonde/actions/workflows/ci.yml"><img src="https://github.com/aniruddh-alt/sonde/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
-  <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python 3.10+"/>
-  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"/></a>
-  <img src="https://img.shields.io/badge/type_checker-pyright-informational" alt="Pyright"/>
-  <img src="https://img.shields.io/badge/status-research-orange" alt="Research"/>
+  <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"/>
 </p>
 
----
+sonde trains activation probes on language models. You write one YAML file,
+run `sonde run cfg.yaml`, and get back a probe artifact with a measured eval
+card. [mechanica](https://github.com/aniruddh-alt/mechanica) loads that
+artifact to score live vLLM traffic.
 
-A **sonde**, in the scientific sense, is a small instrument sent into an otherwise inaccessible medium — a radiosonde riding a weather balloon through the stratosphere, a dropsonde spiraling through a hurricane, a medical sonde threading through tissue. The device is simple. The medium it probes is vast. The asymmetry is the point: a tiny, legible instrument lets you measure something you could never observe directly.
+A run goes through these stages:
+1. Labeled rows are rendered with the chat template or as raw text.
+2. Residual-stream activations are extracted at the blocks you choose.
+3. One probe is fitted per block.
+4. The block with the best validation recall at 1% FPR is selected (AUROC
+   breaks ties, and replaces it when val has too few negatives).
+5. That probe gets a threshold chosen on validation scores, test metrics
+   with bootstrap CIs, a shuffled-label control, and a bag-of-words and
+   length baseline to beat.
 
-Modern transformers are such a medium. A 70B-parameter model holds tens of thousands of concepts, distributed across dozens of layers and millions of neurons, in a geometry that no human can read off the weights. And yet — the **linear representation hypothesis** tells us that most high-level concepts the model cares about are written along *directions* in activation space. Find the direction, and a single dot product tells you whether the concept is present right now, at this layer, for this token.
-
-That dot product is a sonde.
-
-This toolkit is for dropping them into models at scale.
-
-## The pipeline
-
-```mermaid
-flowchart LR
-    A[labeled<br/>records] --> B[ActivationExtractor]
-    B -->|safetensors| C[(activations<br/>per layer · per token)]
-    C --> D[ProbingDataset]
-    D --> E[LayerProbeSweepRunner]
-    E --> F{best layer<br/>selection on val}
-    F --> G[test metrics<br/>+ controls]
-    F --> H[concept direction<br/>for steering]
-
-    style B fill:#2a3a6d,stroke:#8aa0cc,color:#fff
-    style E fill:#2a3a6d,stroke:#8aa0cc,color:#fff
-    style G fill:#ff7755,stroke:#ff7755,color:#fff
-    style H fill:#ffd866,stroke:#ffd866,color:#000
-```
-
-One YAML drives the whole thing. Activation → probe → layer-resolved answer, reproducibly.
-
-## What `sonde` does
-
-- **Extract activations** from any HuggingFace transformer at any layer, token, or internal module.
-- **Train linear probes** — logistic-regression (linear) plus mean / max / softmax / attention / max-rolling-mean pooling — on those activations, with a separate difference-of-means direction estimator (`diff_means`).
-- **Sweep** across layers, token positions, and probe architectures to find *where* in the model a concept lives.
-- **Report** test-set metrics, selectivity controls, and concept directions usable for downstream steering.
+Model access goes through [nnsight](https://nnsight.net) and
+[nnterp](https://github.com/Butanium/nnterp). sonde does not reimplement
+hooks, model loading or the vLLM runtime.
 
 ## Install
 
+sonde needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+**Mac, CI, or any single GPU (`hf` backend):**
+
 ```bash
-uv pip install -e .          # core
-uv pip install -e ".[viz]"   # + matplotlib for ProbeAnalyzer plots
-uv pip install -e ".[dev]"   # + pytest / ruff / pyright
+uv sync --extra hf --extra dev
+uv run sonde run quickstart
 ```
 
-Try it immediately — runs offline on bundled synthetic activations:
+**DGX Spark: two environments.** The `hf` and `vllm` extras conflict. nnterp
+1.3 needs nnsight < 0.8, and the `vllm` backend needs a pinned nnsight
+commit, so each extra gets its own venv. Use a uv-managed Python, because
+nnsight builds from source on aarch64 and needs `Python.h`.
 
 ```bash
+UV_PROJECT_ENVIRONMENT=.venv-hf uv sync --locked --extra hf --python 3.12 --managed-python
+UV_PROJECT_ENVIRONMENT=.venv-vllm uv sync --locked --extra vllm --python 3.12 --managed-python
+
+.venv-hf/bin/sonde run refusal
+```
+
+The Spark is shared. Always set `model.vllm.gpu_memory_utilization`, as the
+shipped recipes do: vLLM's default of 0.9 can freeze the box.
+
+To load and score artifacts you need only the base package, with no extras:
+`import sonde.probe` and `import sonde.fingerprint` use only numpy and the
+stdlib.
+
+## Quickstart
+
+```bash
+sonde run quickstart --dry-run   # validate, print resolved YAML + disk estimate
 sonde run quickstart
+sonde run my.yaml -o probe.epochs=50 -o "extract.layers=[4, 8]"
 ```
 
-## Quickstart: extract activations
+A minimal config, reading rows like
+`{"id": "1", "prompt": "...", "label": 1}`:
+
+```yaml
+name: my-probe
+model: {name: Qwen/Qwen3-0.6B}
+data: {path: data/rows.jsonl, text: prompt, label: label}
+extract: {layers: all, window: prompt, keep: pooled}
+probe: {kind: linear, pooling: mean}
+steps: [extract, train]
+```
+
+The same run from Python:
 
 ```python
-from sonde import (
-    ProbingSampleBuilder, ActivationExtractor, ModelParams, ExtractionParams,
-)
+import sonde
+from sonde import probe
 
-records = [
-    {"id": "ex-1", "text": "The capital of France is", "label": 1},
-    {"id": "ex-2", "text": "The capital of Japan is",  "label": 0},
-]
-bundle = ProbingSampleBuilder.from_iterable(records).to_samples(text_key="text")
-
-extractor = ActivationExtractor(
-    model=ModelParams(model_name="openai-community/gpt2"),
-    extraction=ExtractionParams(
-        save_path="artifacts/activations",   # writes .safetensors + _manifest.json
-        activations=["layers_output:*"],     # every layer
-    ),
-)
-result = extractor.extract(bundle)
-print(result["sample_ids"])
-print(result["labels"])
+run_dir = sonde.run(sonde.load_config("quickstart"))
+for name, p in probe.load_dir(str(run_dir / "probes")).items():
+    print(name, p.block, p.pooling, round(p.threshold, 3))
 ```
 
-## Quickstart: sweep probes across layers
+A run writes `runs/<name>/`:
 
-```python
-from sonde import (
-    ProbingSampleBuilder, ProbeParams, SweepParams, LayerProbeSweepRunner,
-)
-
-# A bundle aligned to the extraction (only labels + ids matter for the split).
-records = [
-    {"id": result["sample_ids"][i], "text": result["sample_ids"][i],
-     "label": int(result["labels"][i])}
-    for i in range(len(result["labels"]))
-]
-bundle = ProbingSampleBuilder.from_iterable(records).to_samples(text_key="text")
-train_idx, val_idx, test_idx = bundle.train_val_test_split(
-    train_fraction=0.7, val_fraction=0.15, test_fraction=0.15,
-    seed=0, group_ids=bundle.ids,
-)
-
-sweep = LayerProbeSweepRunner(
-    probe=ProbeParams(epochs=10, learning_rate=1e-2),
-    sweep=SweepParams(activation_targets=["layers_output:0"]),
-)
-sweep_result = sweep.run(
-    result,
-    train_indices=train_idx, val_indices=val_idx, test_indices=test_idx,
-    labels=[int(x) for x in result["labels"]],
-    group_ids=result["sample_ids"],
-    manifest_path="artifacts/probe_runs/run_manifest.json",
-)
-print(sweep_result.best_key)
-print(sweep_result.test_metrics)
-print(sweep_result.controls)
+```
+config.yaml              resolved config
+extract/                 run.json, manifest.json, shard_00000.safetensors, ...
+splits.json              train / val / test sample indices
+probes/<name>.npz        the selected probe; the only file here
+layers/B<block>.npz      every block's probe, named <name>@B<block>
+metrics.json             headline, per-block val table, test, baseline, control, n counts
+score/<entry>/           scores.jsonl, metrics.json (when labels exist)
 ```
 
-Load directly from a saved extraction manifest (JSON):
+Reruns behave as follows:
+- `extract` resumes from its last complete shard. If the model, data or
+  extract settings changed, it refuses before loading anything; set
+  `output.overwrite: true` to start over.
+- `train` and `score` overwrite their own outputs.
 
-```python
-from sonde import ProbingDataset
+## Config reference
 
-dataset = ProbingDataset.from_extraction_path(
-    "artifacts/activations_manifest.json",
-    activation_key="layers_output:0",
-)
-```
+| Key | Default | Notes |
+|---|---|---|
+| `name` | required | run dir is `<output.dir>/<name>` |
+| `seed` | `0` | drives subsampling, splits, init and data order |
+| `steps` | `[extract, train]` | `extract`, `train`, `score`, run in the listed order |
+| `model.name` | required | HF hub id or local path |
+| `model.revision` | `null` | recorded in the fingerprint as given |
+| `model.dtype` | `bfloat16` | activations are stored in this dtype |
+| `model.backend` | `hf` | `hf` or `vllm`; never auto-detected |
+| `model.vllm` | `{}` | engine kwargs, e.g. `gpu_memory_utilization`, `max_model_len` |
+| `data.path` / `data.hf` | `null` | exactly one: local `.jsonl` / `.csv`, or an HF dataset id |
+| `data.hf_config`, `data.hf_split` | `null`, `train` | HF config and split |
+| `data.text` / `data.messages` | `text` / `null` | exactly one; setting messages alone switches off the text default |
+| `data.response` | `null` | response column; required for `window: response` |
+| `data.label`, `data.id`, `data.group` | `label`, `id`, `null` | column names; rows sharing a group stay in one split |
+| `data.label_map` | `null` | raw value → 0/1; labels must end in {0, 1} |
+| `data.limit` | `null` | seeded subsample size |
+| `data.format` | `chat` | `chat` (tokenizer template) or `raw` |
+| `data.system` | `null` | system prompt for `chat`; serving must send the same one |
+| `data.max_length` | `2048` | keep the first N tokens |
+| `data.split` | `[0.7, 0.15, 0.15]` | train / val / test, stratified |
+| `extract.layers` | `all` | `all`, a list of block indices, or `{every: k}` |
+| `extract.window` | `prompt` | `prompt`, `response`, `all`, `last_turn` |
+| `extract.keep` | `pooled` | `pooled`: one vector per row; `tokens`: every window token |
+| `extract.batch_size` | `16` | |
+| `extract.shard_size`, `extract.shard_bytes` | `4096`, `2147483648` | a shard closes at whichever comes first |
+| `probe.kind` | `linear` | `linear` or `attention` |
+| `probe.pooling` | `mean` | linear: `mean`, `last`, `max`, `rolling_mean`; attention: `attention` |
+| `probe.rolling_window` | `null` | required iff `rolling_mean` |
+| `probe.init` | `random` | `diff_means` needs `kind: linear` and `epochs: 0` |
+| `probe.epochs`, `probe.lr`, `probe.weight_decay`, `probe.batch_size` | `20`, `1e-3`, `0.0`, `256` | AdamW |
+| `probe.patience` | `3` | early stopping on val loss; `0` turns it off |
+| `probe.max_fpr` | `0.01` | set: lowest threshold with val FPR ≤ `max_fpr`; `null`: best F1 |
+| `probe.select` | `recall_at_fpr` | `recall_at_fpr` needs `max_fpr`; `auroc`; `group_auroc` needs `data.group` |
+| `score` | `[]` | `{name, probe?, <any data key>}`; unset keys inherit from `data`, explicit `null` overrides |
+| `output.dir`, `output.overwrite` | `runs`, `false` | |
 
-If a manifest contains multiple activation streams, `activation_key` is required.
+A section is required only when a listed step needs it:
 
-`LayerProbeSweepRunner.run(...)` requires explicit `train_indices`, `val_indices`, and
-`test_indices` and evaluates test metrics only after selecting the best layer on validation.
-If `manifest_path` already exists, the run fails by default. Use
-`manifest_overwrite=True` to replace it or `manifest_unique_path=True` to auto-suffix
-the filename.
-
-`SampleBundle.train_val_test_split(...)` supports explicit `group_ids`; when omitted, it
-can auto-group by sample IDs by default. Set `auto_group_by_id_when_none=False` to force
-non-grouped stratification unless you pass `group_ids` explicitly.
-
-## Causal interventions
-
-A trained probe's direction is a steering / ablation vector. The
-`InterventionContext` applies it over an nnterp model; call `apply()` **inside**
-your own `with model.trace(...)` / `with model.generate(...)` block (nnsight
-discovers traced ops from that block's source):
-
-```python
-from nnterp import StandardizedTransformer
-from sonde import InterventionContext, ProbeArtifact
-
-model = StandardizedTransformer("openai-community/gpt2")
-probe = ProbeArtifact.load("artifacts/quickstart/quickstart_probe_probe.safetensors")
-
-ctx = InterventionContext(model).add_steering(
-    layers=[probe.layer], vector=probe.direction, mode="project_subtract",
-)
-with model.generate(prompts, max_new_tokens=128) as tracer:   # reapplies per token
-    ctx.apply()
-    out = model.generator.output.save()
-```
-
-`mode="project_subtract"` ablates the direction (`h − factor·(h·v̂)v̂`);
-`mode="additive"` adds `factor·v̂`. See `examples/causal_loop_gpt2.py` for the
-full extract → probe → ablate → measure loop **with the random-direction
-specificity control**, and `docs/intervention_design.md` §7.5 for the controls
-any causal claim must report.
-
-## CLI
-
-```bash
-sonde run quickstart                       # bundled offline demo
-sonde run -c configs/my_experiment.yaml    # your config
-sonde my_experiment.yaml -o probe.epochs=50
-```
-
-Actions: `extract`, `generate`, `probe_sweep`, `diff_means`, `pipeline`.
-`probe_sweep` / `diff_means` read a pre-extracted artifact via `io.input_path`
-and write a probe artifact (the concept direction) to the output directory.
-
-## What you can probe
-
-### Indexed activation kinds
-
-| Kind | What it is |
+| Step | Sections |
 |---|---|
-| `layers_input` | residual stream entering each transformer block |
-| `layers_output` | residual stream leaving each transformer block |
-| `attentions_input` / `attentions_output` | attention sub-layer input/output |
-| `mlps_input` / `mlps_output` | MLP sub-layer input/output |
-| `attention_probabilities` | post-softmax attention weights (requires `enable_attention_probs=True`) |
+| `extract` | `model`, `data`, `extract`, and `probe` when `keep: pooled` |
+| `train` | `data`, `probe` |
+| `score` | `model`, `data`, `score` |
 
-### Selector syntaxes for indexed kinds
+These checks run when the config loads, and errors name the offending key:
+- Unknown keys are rejected.
+- `keep: pooled` needs `kind: linear` with `pooling` `mean` or `last`.
+- `attention`, `max` and `rolling_mean` need `keep: tokens`.
+- `window: response` needs `data.response`.
+- `split` must sum to 1.
 
-| Syntax | Meaning |
+## Recipes
+
+`sonde run <name>` resolves `sonde/recipes/<name>.yaml`. Recipe data paths
+are relative, so run recipes from the repo root.
+
+| Recipe | Model | What it does |
+|---|---|---|
+| `quickstart` | small, CPU | tiny bundled dataset; extract, train and score in one go |
+| `refusal` | Llama-3.1-8B-Instruct | linear probe at every block on `experiments/refusal_probing/data/labeled.jsonl`, `format: raw` |
+| `high_stakes` | Llama-3.1-8B | attention probe at blocks 10–20 on `Arrrlex/models-under-pressure`, scored on five OOD test sets, `format: raw` |
+
+The Llama models are gated. Run `huggingface-cli login` or set `HF_TOKEN`.
+
+Both GPU recipes are `format: raw`, so their probes record
+`prompt_format = "raw"`. mechanica refuses to use them on chat-templated
+traffic, because a raw-fitted probe scores templated text near 1.0.
+
+## The probe artifact
+
+`probes/<name>.npz` holds `w` (`[H]` float32), `q` (`[H]`, attention only)
+and a JSON `meta` with `format: 1`. It loads with numpy alone:
+
+```python
+import numpy as np
+from sonde import probe
+
+p = probe.Probe.load("runs/refusal/probes/refusal.npz")
+acts = np.zeros((12, p.w.shape[0]), dtype=np.float32)  # [T, H] at p.block
+score = p.pooled_score(acts)  # sigmoid of pooled logits, in [0, 1]
+flagged = p.flag(acts)  # score >= p.threshold
+```
+
+- `threshold` lives on the `pooled_score` scale. It is chosen on validation
+  scores of the exported numpy probe, the same function mechanica calls.
+- `metrics` is the eval card: val and test metrics, the control, and the
+  `n_pos` / `n_neg` behind each number.
+- `engine` records the backend and library versions, for example
+  `hf==5.1.0+nnterp==1.3.0`.
+
+**Using it from mechanica.** mechanica imports `sonde.probe` and
+`sonde.fingerprint` and loads a probe directory with `probe.load_dir`.
+Before scoring a request it calls
+`p.serves(fingerprint, adapter, prompt_format)`. That returns a reason
+string when the checkpoint fingerprint, the LoRA adapter or the
+prompt-format digest disagrees with what the probe was fitted on, and
+`None` when the probe may score.
+
+## Layer numbering
+
+`block = L` is the residual stream right after decoder block `L` (0-indexed),
+before any final norm. The last block is included.
+
+| Where | Same tensor |
 |---|---|
-| `layers_output:5` | single layer |
-| `layers_output` or `layers_output:*` or `layers_output:all` | every layer |
-| `layers_output:0-4` | inclusive range |
-| `layers_output:0:5` | slice |
-| `layers_output:0:12:2` | slice with step |
+| nnterp (`hf` backend) | `model.layers_output[L]` |
+| nnsight on vLLM (`vllm` backend) | `out = model.model.layers[L].output; out[0] + out[1]` |
+| vLLM `extract_hidden_states` (mechanica) | aux layer `L + 1`, i.e. `p.vllm_aux_layer()` |
+| HF `output_hidden_states` | `hidden_states[L + 1]` only for `L < N - 1`; the last entry is post-norm |
 
-### Non-indexed activation kinds
+sonde never reads `output_hidden_states`. The `vllm` backend accepts Llama,
+Mistral, Qwen2 and Qwen3 decoder layers and refuses any other architecture
+when it loads.
 
-`token_embeddings` · `logits` · `next_token_probs` · `input_ids`
+## More
 
-### Custom module hooks
-
-- `module_input:layers[3].mlp.down_proj`
-- `module_output:layers[3].mlp.gate_proj`
-
-## Learn more
-
-- **[docs/linear-probes-primer.md](docs/linear-probes-primer.md)** — a presentation-ready primer on linear probes: what they are, how to train them, where they're used, and the key papers.
-- **`examples/causal_loop_gpt2.py`** — the full extract → probe → ablate → measure loop on gpt2, with a specificity control.
-- **`experiments/refusal_probing/`** — a worked end-to-end refusal-detection pipeline.
-
-## Contributing
-
-PRs welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for dev setup, lint/type/test loop, and the conventions we follow.
+- [docs/linear-probes-primer.md](docs/linear-probes-primer.md): what linear
+  probes measure, and the papers behind them.
+- [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, tests and style.

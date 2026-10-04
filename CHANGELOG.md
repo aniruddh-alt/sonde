@@ -6,6 +6,53 @@ API may change between minor versions.
 
 ## [Unreleased]
 
+## [0.2.0] - Unreleased
+
+A rewrite; nothing from 0.1 stays compatible. 0.1 is preserved at the git
+tag `v0.1-legacy`.
+
+### Added
+- `sonde run CFG|RECIPE [-o k=v ...] [--dry-run]`, driven by one pydantic
+  config (`extra="forbid"`) with an explicit `steps:` list.
+- `sonde.probe.Probe` (`.npz`, format 1) and `sonde.fingerprint`, importable
+  with numpy and the stdlib only. This is the artifact mechanica loads.
+- Two backends, chosen explicitly: `hf` (nnterp 1.3 on nnsight 0.7) and
+  `vllm` (nnsight's `VLLM`; experimental: it loads, but extraction and
+  generation raise `NotImplementedError`).
+- Sharded, resumable extraction with a config-hash check that runs before
+  any model loads.
+- Linear (`mean`, `last`, `max`, `rolling_mean`) and attention probes,
+  `diff_means` init, a validation-chosen threshold (`max_fpr`, default 1%,
+  or best F1), recall at `max_fpr` as the headline with bootstrap CIs,
+  rank and group AUROC, a shuffled-label control, and bag-of-words and
+  length baselines.
+- Recipes: `quickstart`, `refusal`, `high_stakes`.
+
+### Fixed
+- Activations at batch size > 1 were corrupted by padding without an
+  attention mask. Chat templates are now applied, and the BOS token is no
+  longer doubled.
+- The seed is now set before initialisation, and training uses CUDA when
+  available.
+
+### Removed
+- The old packages (`activation`, `core`, `dataset`, `directions`,
+  `interventions`, `generation`, `probes`, `runners`, `configs`, `cli`),
+  PCA, the extra activation kinds and the selector classes.
+- The OmegaConf, einops and torchmetrics dependencies, and support for
+  Python 3.10 and 3.11.
+- The experiments `geometry_of_truth`, `rjudge_dissociation`,
+  `scaleJSD_probing` and `refusal_probe_qwen.py`, plus `examples/`.
+- The docs `toolkit_audit.md`, `intervention_design.md`,
+  `oumi_integration_plan.md` and `research_gaps_and_extensions.md`, and the
+  committed refusal activations.
+
+### Changed
+- CI is one job: `uv sync --locked`, then ruff, pyright and
+  `pytest -m "not gpu"` on Python 3.12.
+- `docs/linear-probes-primer.md`: an accuracy pass on its paper summaries
+  and citations.
+
 ## [0.1.0] - 2026-06-28
 
 ### Packaging
