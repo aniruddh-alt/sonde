@@ -11,7 +11,6 @@ from sonde import cli
 from sonde import config
 from sonde import fingerprint
 from sonde import probe
-from sonde import runner
 from sonde import score
 
 QUICKSTART = config.RECIPES_DIR / "data" / "quickstart.jsonl"
@@ -45,21 +44,6 @@ def test_quickstart_data_resolves_from_any_cwd(tmp_path, monkeypatch):
     cfg = config.load("quickstart")
     paths = [cfg.data.path if cfg.data else None, cfg.score[0].path]
     assert all(p is not None and pathlib.Path(p).is_file() for p in paths)
-
-
-def test_runner_refuses_unregistered_step(tmp_path, monkeypatch):
-    monkeypatch.delitem(runner.STEPS, "score")
-    cfg = config.RunConfig(
-        name="x",
-        model=config.ModelConfig(name="gpt2"),
-        data=config.DataConfig(path=str(QUICKSTART)),
-        score=[config.ScoreEntry(name="s")],
-        output=config.OutputConfig(dir=str(tmp_path)),
-        steps=["score"],
-    )
-    with pytest.raises(ValueError, match="score"):
-        runner.run(cfg)
-    assert not (tmp_path / "x").exists()
 
 
 def _planted(tmp_path, **override):

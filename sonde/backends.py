@@ -8,6 +8,7 @@ from typing import Any
 
 import nnsight
 import torch
+import transformers
 
 from sonde import config
 from sonde import data
@@ -138,3 +139,81 @@ def forward(
                 row = window_pool(h[i], e.span, keep, pooling)
                 out[b].append(nnsight.save(row.to("cpu", copy=True)))
     return out
+
+
+@dataclasses.dataclass
+class Steering:
+    """A residual-stream edit at one block, applied at every forward pass.
+
+    Attributes:
+        block: Decoder block whose output is edited (spec §5 numbering).
+        vector: [H] unit-norm direction v.
+        mode: "add" (x += s·v) or "ablate" (x -= s·(x·v)·v).
+        strength: The multiple s.
+    """
+
+    block: int
+    vector: torch.Tensor
+    mode: str
+    strength: float
+
+
+def generate(
+    loaded: Loaded,
+    prompts: list[list[int]],
+    gen: config.GenerateConfig,
+    seed: int,
+    steering: Steering | None = None,
+) -> list[list[int]]:
+    """Generates one response per prompt.
+
+    Args:
+        loaded: The model from `load_model`.
+        prompts: Token ids per prompt, generation prompt included.
+        gen: Sampling settings; temperature 0 is greedy.
+        seed: Sampler seed for this call.
+        steering: Edit applied at every forward pass (prefill and each
+            decode step), or None for plain generation.
+
+    Returns:
+        Generated token ids per prompt, in prompt order, up to and including
+        the first EOS.
+    """
+    if loaded.backend != "hf":
+        raise NotImplementedError(f"generate on {loaded.backend}")
+    model = loaded.model
+    inputs = loaded.tokenizer.pad(
+        {"input_ids": prompts}, padding_side="left", return_tensors="pt"
+    )
+    n = inputs["input_ids"].shape[1]
+    sampling = gen.temperature > 0
+    knobs = {"temperature": gen.temperature, "top_p": gen.top_p, "top_k": 0}
+    # ponytail: transformers fills fields left unset here from the
+    # checkpoint's generation_config (e.g. repetition_penalty); pin one here
+    # if a recipe model ships it.
+    gc = transformers.GenerationConfig(
+        do_sample=sampling,
+        max_new_tokens=gen.max_tokens,
+        **(knobs if sampling else {}),
+    )
+    torch.manual_seed(seed)
+    with torch.no_grad(), model.generate(generation_config=gc) as tracer:
+        with tracer.invoke(inputs):
+            if steering is not None:
+                b, s = steering.block, steering.strength
+                for _ in tracer.all():
+                    h = model.layers_output[b]
+                    v = steering.vector.to(h.device, h.dtype)
+                    if steering.mode == "add":
+                        model.layers_output[b] = h + s * v
+                    else:
+                        model.layers_output[b] = h - s * (h @ v)[..., None] * v
+        with tracer.invoke():
+            out = nnsight.save(tracer.result)
+    eos = model.generation_config.eos_token_id
+    eos = set(eos if isinstance(eos, list) else [eos])
+    responses = []
+    for row in out[:, n:].tolist():
+        end = next((i + 1 for i, t in enumerate(row) if t in eos), len(row))
+        responses.append(row[:end])
+    return responses
