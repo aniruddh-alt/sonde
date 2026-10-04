@@ -88,11 +88,6 @@ def test_window_pool():
         backends.window_pool(h, (1, 3), "pooled", "max")
 
 
-def test_vllm_backend_is_not_here_yet():
-    with pytest.raises(NotImplementedError, match="phase 5"):
-        backends.load_model(config.ModelConfig(name="x", backend="vllm"))
-
-
 def test_load_model_is_cached():
     cfg = config.ModelConfig(name="gpt2", dtype="float32")
     loaded = backends.load_model(cfg)
