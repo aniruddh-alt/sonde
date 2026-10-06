@@ -1,9 +1,0 @@
-{
-  "venvPath": ".",
-  "venv": ".venv",
-  "pythonVersion": "3.10",
-  "typeCheckingMode": "basic",
-  "reportPrivateImportUsage": "none",
-  "include": ["sonde"],
-  "exclude": ["**/__pycache__", ".venv", "tests", "experiments"]
-}
