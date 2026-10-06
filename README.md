@@ -48,10 +48,10 @@ sondekit run quickstart
 
 This trains a sentiment probe on gpt2 with a tiny bundled dataset and
 finishes in a few seconds on a laptop CPU. The results go to
-`runs/quickstart/`, and the last log line is the headline:
+`runs/quickstart/`, and the train step logs the headline:
 
 ```
-headline {"max_fpr": 0.01, "recall_at_fpr": 1.0, "auroc": 1.0, "baseline_auroc": 0.78, ...}
+headline {"max_fpr": 0.01, "recall_at_fpr": 1.0, ..., "auroc": 1.0, ..., "baseline_auroc": 1.0, ...}
 ```
 
 To train your own probe, write a config. This one reads rows such as
@@ -79,8 +79,9 @@ option.
 
 ## Recipes
 
-`sondekit run <name>` loads `sondekit/recipes/<name>.yaml`. Run recipes from the
-repo root, because their data paths are relative.
+`sondekit run <name>` loads `sondekit/recipes/<name>.yaml`. The `refusal`
+recipe reads `data/refusal/` relative to the current directory, so run it
+from the repo root.
 
 | Recipe | Model | Task |
 |---|---|---|
@@ -121,12 +122,15 @@ UV_PROJECT_ENVIRONMENT=.venv-hf uv sync --locked --extra hf
 UV_PROJECT_ENVIRONMENT=.venv-vllm uv sync --locked --extra vllm
 ```
 
-## Learn more
+## Documentation
 
-- [docs/configuration.md](https://github.com/aniruddh-alt/sondekit/blob/main/docs/configuration.md): config reference, run
-  outputs, rerun behavior and layer numbering.
-- [docs/linear-probes-primer.md](https://github.com/aniruddh-alt/sondekit/blob/main/docs/linear-probes-primer.md): what linear
-  probes measure, and the papers behind them.
+- [Getting started](https://github.com/aniruddh-alt/sondekit/blob/main/docs/getting-started.md): install, the quickstart, and a first probe on your own data.
+- [Data](https://github.com/aniruddh-alt/sondekit/blob/main/docs/data.md): dataset formats, columns, chat templates and extraction windows.
+- [Evaluation](https://github.com/aniruddh-alt/sondekit/blob/main/docs/evaluation.md): reading `metrics.json`, baselines, controls and scoring shifted data.
+- [Cookbook](https://github.com/aniruddh-alt/sondekit/blob/main/docs/cookbook.md): worked configs for common probing tasks.
+- [Python API](https://github.com/aniruddh-alt/sondekit/blob/main/docs/python-api.md): loading and serving a trained probe from Python.
+- [Configuration](https://github.com/aniruddh-alt/sondekit/blob/main/docs/configuration.md): every option, run outputs, rerun behavior and layer numbering.
+- [Linear probes primer](https://github.com/aniruddh-alt/sondekit/blob/main/docs/linear-probes-primer.md): what linear probes measure, and the papers behind them.
 - [CONTRIBUTING.md](https://github.com/aniruddh-alt/sondekit/blob/main/CONTRIBUTING.md): development setup, tests and style.
 
 sondekit is released under the [Apache 2.0 license](https://github.com/aniruddh-alt/sondekit/blob/main/LICENSE).
