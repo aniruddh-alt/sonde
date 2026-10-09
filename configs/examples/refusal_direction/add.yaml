@@ -1,0 +1,32 @@
+# Refusal direction, step 3 of 3: add it while answering harmless prompts.
+#
+# Generates greedy replies to 200 harmless prompts with s times the
+# layer-14 direction added to the residual stream.
+#
+# Requirements:
+#   - configs/examples/refusal_direction/direction.yaml has run
+#   - A GPU with about 12 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/refusal_direction/add.yaml
+#   python configs/examples/refusal_direction/count_refusals.py runs/refusal_add
+#
+# Expected results:
+#   - refusal rate 0.08 at strength 0, then 0.30, 0.84 and 1.00 at 4, 8, 16
+#   - about 3 minutes
+#
+# See also:
+#   - configs/examples/refusal_direction/ablate.yaml
+
+name: refusal_add
+model: {name: Qwen/Qwen2.5-1.5B-Instruct, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmless200.jsonl
+  format: chat
+  max_length: 256
+generate: {max_tokens: 64, temperature: 0}
+steer:
+  probe: runs/refusal_direction/layers/B14.npz
+  mode: add
+  strengths: [0, 4, 8, 16]
+steps: [steer]

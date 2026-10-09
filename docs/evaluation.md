@@ -423,16 +423,18 @@ nothing, and `recall_at_fpr` alone would hide that.
 The test split comes from the same distribution as the training data, so a
 high test score shows the probe works on more of the same. Monitors meet
 other phrasings, other topics and adversarial prompts. A probe can look
-perfect in distribution and fall to near chance on a shifted set. In our
-runs, a truth probe did this on negated statements. Score entries exist to
-catch this before deployment.
+perfect in distribution and break on a shifted set. The
+[truth example](../configs/examples/truth/train.yaml) scores AUROC 0.995 on
+its test split, but on negated statements its saved threshold flags 70% of
+the false ones as true. Score entries exist to catch this before deployment.
 
 Pick sets that differ from training in the ways deployment will: other
 sources, other templates, jailbreak or paraphrased prompts. Compare
 `auroc` across entries for ranking, and `recall` and `fpr` at the frozen
-threshold for what the deployed probe would do. In our runs on jailbreak
-prompts, `rolling_mean` and `attention` probes generalized best out of
-distribution, so they are worth trying when OOD recall drops.
+threshold for what the deployed probe would do. In the
+[harmful-prompt examples](../configs/examples/harmful_prompts),
+`rolling_mean` and `attention` probes transfer best to jailbreak prompts,
+so they are worth trying when OOD recall drops.
 
 ### Measuring false positives on benign traffic
 
@@ -521,8 +523,9 @@ sondekit run quickstart -o probe.init=diff_means -o probe.epochs=0 -o probe.pool
 ```
 
 `steer` uses the probe's `w` as its direction, and diff-means directions
-steer well: in our runs, ablating a diff-means refusal direction removed
-most refusals and adding it induced them.
+steer well. In the [refusal direction
+example](../configs/examples/refusal_direction), ablating the direction
+removes most refusals and adding it induces them.
 
 ## Checklist before deploying a probe
 

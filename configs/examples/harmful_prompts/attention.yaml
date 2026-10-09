@@ -1,0 +1,32 @@
+# Harmful-prompt probe on Qwen3-1.7B, an attention probe over prompt tokens.
+#
+# The same data and JailbreakBench score set as train.yaml, so the poolings
+# can be compared on transfer.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 24 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/harmful_prompts/attention.yaml
+#
+# Expected results:
+#   - layer 20; test AUROC 1.0; JailbreakBench AUROC 0.93
+#   - control FAILS (shuffle mean 0.65)
+#   - about 2.5 minutes
+#
+# See also:
+#   - docs/cookbook.md: token-level probes
+#   - docs/evaluation.md: the shuffled-label control
+
+name: harmful_attention
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: {every: 2}, window: prompt, keep: tokens, batch_size: 32}
+probe: {kind: attention, pooling: attention}
+score:
+  - {name: jbb, path: configs/examples/data/jbb.jsonl}
+steps: [extract, train, score]

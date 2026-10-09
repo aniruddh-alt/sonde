@@ -1,0 +1,42 @@
+# Sentiment probe on Qwen3-0.6B, trained on SST-2 and scored on IMDB.
+#
+# A linear probe on mean-pooled activations at every layer. IMDB reviews are
+# longer and from another source, so the score set shows how the probe and
+# its saved threshold transfer. Both datasets load from the Hugging Face Hub.
+#
+# Requirements:
+#   - A GPU with about 8 GB free (CPU works but is slow).
+#
+# Usage:
+#   sondekit run configs/examples/sentiment/train.yaml
+#
+# Expected results:
+#   - layer 12; test AUROC 0.95, recall at 1% FPR 0.53; bag-of-words 0.87
+#   - IMDB: AUROC 0.95, but the frozen threshold catches only 21% of
+#     positives, because long reviews shift the score scale
+#   - about 1 minute
+#
+# See also:
+#   - docs/evaluation.md: the headline, baselines and score sets
+#   - configs/examples/sentiment/train_8b.yaml: the same probe on Qwen3-8B
+
+name: sentiment
+model: {name: Qwen/Qwen3-0.6B, dtype: bfloat16}
+data:
+  hf: stanfordnlp/sst2
+  hf_split: train
+  text: sentence
+  id: null
+  limit: 20000
+  format: raw
+  max_length: 128
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 128}
+probe: {kind: linear, pooling: mean}
+score:
+  - name: imdb
+    hf: stanfordnlp/imdb
+    hf_split: test
+    text: text
+    limit: 2000
+    max_length: 512
+steps: [extract, train, score]

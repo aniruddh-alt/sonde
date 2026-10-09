@@ -1,0 +1,38 @@
+# Sentiment probe on Qwen3-8B: train.yaml at a larger scale.
+#
+# Extracts every fourth layer to keep the disk and time cost down.
+#
+# Requirements:
+#   - A GPU with about 40 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/sentiment/train_8b.yaml
+#
+# Expected results:
+#   - layer 16; test AUROC 0.96, recall at 1% FPR 0.52; bag-of-words 0.87
+#   - IMDB: AUROC 0.97, frozen-threshold recall 0.29 at FPR 0.001
+#   - about 10 minutes
+#
+# See also:
+#   - configs/examples/sentiment/train.yaml
+
+name: sentiment_8b
+model: {name: Qwen/Qwen3-8B, dtype: bfloat16}
+data:
+  hf: stanfordnlp/sst2
+  hf_split: train
+  text: sentence
+  id: null
+  limit: 20000
+  format: raw
+  max_length: 128
+extract: {layers: {every: 4}, window: prompt, keep: pooled, batch_size: 64}
+probe: {kind: linear, pooling: mean}
+score:
+  - name: imdb
+    hf: stanfordnlp/imdb
+    hf_split: test
+    text: text
+    limit: 2000
+    max_length: 512
+steps: [extract, train, score]

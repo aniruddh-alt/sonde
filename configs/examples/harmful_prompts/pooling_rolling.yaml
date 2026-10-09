@@ -1,0 +1,33 @@
+# Harmful-prompt probe on Qwen3-1.7B, rolling mean over 8-token windows.
+#
+# The same data and JailbreakBench score set as train.yaml, so the poolings
+# can be compared on transfer.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 24 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/harmful_prompts/pooling_rolling.yaml
+#
+# Expected results:
+#   - layer 14; test AUROC 1.0; JailbreakBench AUROC 0.94, the best here
+#   - control FAILS: one shuffle reached 0.15, far outside chance for this
+#     validation size, so a fit to random labels also separates the classes
+#   - about 3 minutes
+#
+# See also:
+#   - docs/cookbook.md: token-level probes
+#   - docs/evaluation.md: the shuffled-label control
+
+name: harmful_rolling
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: {every: 2}, window: prompt, keep: tokens, batch_size: 32}
+probe: {kind: linear, pooling: rolling_mean, rolling_window: 8}
+score:
+  - {name: jbb, path: configs/examples/data/jbb.jsonl}
+steps: [extract, train, score]

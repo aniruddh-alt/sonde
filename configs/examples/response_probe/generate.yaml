@@ -1,0 +1,29 @@
+# Response probe on Qwen2.5-1.5B-Instruct, step 1 of 3: generate replies.
+#
+# Samples greedy replies to the harmful and harmless prompts. Step 2 labels
+# each reply as a refusal or not, and step 3 trains a probe that reads the
+# reply tokens.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 12 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/response_probe/generate.yaml
+#   python configs/examples/response_probe/label_responses.py
+#   sondekit run configs/examples/response_probe/train.yaml
+#
+# Expected results:
+#   - 1040 replies in runs/response_generate/generations.jsonl, about 2 minutes
+#
+# See also:
+#   - docs/cookbook.md: response probes
+
+name: response_generate
+model: {name: Qwen/Qwen2.5-1.5B-Instruct, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+generate: {max_tokens: 64, temperature: 0}
+steps: [generate]

@@ -1,0 +1,32 @@
+# Harmful-prompt probe on Qwen3-1.7B, reading the last prompt token.
+#
+# The same data and JailbreakBench score set as train.yaml, so the poolings
+# can be compared on transfer.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 16 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/harmful_prompts/pooling_last.yaml
+#
+# Expected results:
+#   - layer 7; test AUROC 1.0, recall at 1% FPR 1.0
+#   - JailbreakBench AUROC 0.83
+#   - control passes; about 1 minute
+#
+# See also:
+#   - docs/cookbook.md: token-level probes
+#   - docs/evaluation.md: the shuffled-label control
+
+name: harmful_last
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 32}
+probe: {kind: linear, pooling: last}
+score:
+  - {name: jbb, path: configs/examples/data/jbb.jsonl}
+steps: [extract, train, score]

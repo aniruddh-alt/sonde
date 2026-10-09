@@ -1,0 +1,33 @@
+# Harmful-prompt probe on Qwen3-1.7B, a difference-of-means direction on mean-pooled prompts.
+#
+# The same data and JailbreakBench score set as train.yaml, so the poolings
+# can be compared on transfer.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 16 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/harmful_prompts/diff_means.yaml
+#
+# Expected results:
+#   - layer 0; test AUROC 0.998; JailbreakBench AUROC 0.77
+#   - control FAILS: random-label mean differences point along the top
+#     direction of variance, which separates the classes here
+#   - about 2 minutes
+#
+# See also:
+#   - docs/cookbook.md: token-level probes
+#   - docs/evaluation.md: the shuffled-label control
+
+name: harmful_diff_means
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 32}
+probe: {kind: linear, pooling: mean, init: diff_means, epochs: 0}
+score:
+  - {name: jbb, path: configs/examples/data/jbb.jsonl}
+steps: [extract, train, score]

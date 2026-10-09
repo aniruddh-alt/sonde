@@ -1,0 +1,33 @@
+# Response probe, step 3 of 3: does the reply refuse? Read from reply tokens.
+#
+# Trains on activations over the reply tokens only (window: response), using
+# the exact token ids the generate step recorded.
+#
+# Requirements:
+#   - generate.yaml and label_responses.py have run
+#   - A GPU with about 12 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/response_probe/train.yaml
+#
+# Expected results:
+#   - test AUROC 0.99, recall at 1% FPR 0.99
+#   - bag-of-words 0.998 and length AUROC 0.17 (refusals are short), and the
+#     control FAILS: refusals are obvious from the text alone, so this probe
+#     shows the pipeline works, not that it found anything subtle
+#   - under a minute
+#
+# See also:
+#   - docs/data.md: extraction windows
+
+name: response_probe
+model: {name: Qwen/Qwen2.5-1.5B-Instruct, dtype: bfloat16}
+data:
+  path: configs/examples/data/responses_labeled.jsonl
+  format: chat
+  response: response
+  label: refused
+  max_length: 384
+extract: {layers: all, window: response, keep: pooled, batch_size: 32}
+probe: {kind: linear, pooling: mean}
+steps: [extract, train]

@@ -13,3 +13,4 @@ runs/
 pr2.diff
 .pr-review-telemetry.jsonl
 .pr-review-residue.json
+configs/examples/data/

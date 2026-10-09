@@ -1,0 +1,33 @@
+# Refusal direction on Qwen2.5-1.5B-Instruct (Arditi et al. 2024), step 1 of 3.
+#
+# Fits a difference-of-means direction between harmful and harmless prompts at
+# the last prompt token of every layer. ablate.yaml and add.yaml then steer
+# generation with the layer-14 direction to show it is causal.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 12 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/refusal_direction/direction.yaml
+#
+# Expected results:
+#   - selects layer 24 (test AUROC 1.0); layer 14, used for steering, has
+#     validation AUROC 0.9997
+#   - control FAILS, as it does for most difference-of-means probes on easy
+#     tasks: a random-label mean difference also lands on the top direction
+#     of variance. The steering steps are the real test here.
+#   - under a minute
+#
+# See also:
+#   - docs/cookbook.md: difference-of-means direction and steering
+
+name: refusal_direction
+model: {name: Qwen/Qwen2.5-1.5B-Instruct, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 32}
+probe: {kind: linear, pooling: last, init: diff_means, epochs: 0}
+steps: [extract, train]

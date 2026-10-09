@@ -1,0 +1,37 @@
+# Harmful-prompt probe on Qwen3-1.7B: a linear probe on mean-pooled prompts.
+#
+# Harmful AdvBench instructions vs harmless Alpaca instructions, rendered with
+# the chat template. Two score sets: JailbreakBench (harmful and benign
+# behaviors written another way) and 500 benign Alpaca prompts, which
+# measure the false-positive rate at the saved threshold.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 16 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/harmful_prompts/train.yaml
+#
+# Expected results:
+#   - test AUROC 1.0, recall at 1% FPR 1.0; bag-of-words 0.998
+#   - JailbreakBench: AUROC 0.78; at the frozen threshold recall 0.81 with
+#     FPR 0.40, because JBB's benign prompts look harmful on the surface
+#   - benign Alpaca: FPR 0.002 at the frozen threshold
+#   - about 1 minute
+#
+# See also:
+#   - pooling_*.yaml and attention.yaml in this folder: other poolings
+#   - docs/cookbook.md: out-of-distribution and benign-only score sets
+
+name: harmful_mean
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 32}
+probe: {kind: linear, pooling: mean}
+score:
+  - {name: jbb, path: configs/examples/data/jbb.jsonl}
+  - {name: alpaca_benign, path: configs/examples/data/alpaca_benign.jsonl}
+steps: [extract, train, score]

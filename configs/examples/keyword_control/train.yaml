@@ -1,0 +1,29 @@
+# Keyword control on Qwen3-0.6B: the label is whether "dog" is in the text.
+#
+# A sanity check for the pipeline and the baselines. The probe and the
+# bag-of-words baseline should both score near 1.0. When a real task looks
+# like this, the probe is reading words, not anything deeper.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py keyword
+#   - A GPU with about 8 GB free, or a CPU.
+#
+# Usage:
+#   sondekit run configs/examples/keyword_control/train.yaml
+#
+# Expected results:
+#   - test AUROC 1.0, recall at 1% FPR 1.0; bag-of-words 1.0; length 0.5
+#   - control passes
+#
+# See also:
+#   - docs/evaluation.md: baselines
+
+name: keyword_control
+model: {name: Qwen/Qwen3-0.6B, dtype: bfloat16}
+data:
+  path: configs/examples/data/keyword_dog.jsonl
+  format: raw
+  max_length: 64
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 64}
+probe: {kind: linear, pooling: mean}
+steps: [extract, train]

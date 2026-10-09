@@ -1,0 +1,34 @@
+# Harmful-prompt probe on Qwen3-1.7B, max-pooled over prompt tokens.
+#
+# The same data and JailbreakBench score set as train.yaml, so the poolings
+# can be compared on transfer.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 24 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/harmful_prompts/pooling_max.yaml
+#
+# Expected results:
+#   - layer 14; test AUROC 1.0; JailbreakBench AUROC 0.92
+#   - control FAILS (shuffle mean 0.83): the max over more tokens grows with
+#     prompt length, and length predicts the label here (length AUROC 0.64).
+#     Shown as a warning case, not a recipe to copy.
+#   - about 2.5 minutes
+#
+# See also:
+#   - docs/cookbook.md: token-level probes
+#   - docs/evaluation.md: the shuffled-label control
+
+name: harmful_max
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful.jsonl
+  format: chat
+  max_length: 256
+extract: {layers: {every: 2}, window: prompt, keep: tokens, batch_size: 32}
+probe: {kind: linear, pooling: max}
+score:
+  - {name: jbb, path: configs/examples/data/jbb.jsonl}
+steps: [extract, train, score]

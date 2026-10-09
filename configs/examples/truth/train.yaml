@@ -1,0 +1,35 @@
+# Truth probe on Qwen3-1.7B (Marks & Tegmark, "The Geometry of Truth").
+#
+# Trains on true and false statements about cities ("The city of X is in Y")
+# and scores their negations ("... is not in Y"). Statements about the same
+# city stay in one split (data.group), so the test set has unseen cities.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py truth
+#   - A GPU with about 8 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/truth/train.yaml
+#
+# Expected results:
+#   - layer 17; test AUROC 0.995, recall at 1% FPR 0.87
+#   - bag-of-words 0.44: the words alone do not give the answer away
+#   - neg_cities: AUROC 0.72, and the frozen threshold flags 70% of false
+#     negated statements as true. The probe does not transfer to negation.
+#   - about 4 minutes
+#
+# See also:
+#   - docs/data.md: group-aware splits
+
+name: truth
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/cities.jsonl
+  format: raw
+  group: city
+  max_length: 64
+extract: {layers: all, window: prompt, keep: pooled, batch_size: 64}
+probe: {kind: linear, pooling: last}
+score:
+  - {name: neg_cities, path: configs/examples/data/neg_cities.jsonl}
+steps: [extract, train, score]

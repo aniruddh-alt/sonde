@@ -474,6 +474,8 @@ instead of silently scoring different prompts.
 
 ## Where next
 
+- [Example configs](../configs/README.md): these recipes as runnable
+  files, with data preparation and expected results.
 - [Evaluation](evaluation.md#checklist-before-deploying-a-probe): the
   checks to run before deploying any of these probes.
 - [Python API](python-api.md): loading the probe file and scoring

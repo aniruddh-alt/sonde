@@ -128,6 +128,7 @@ UV_PROJECT_ENVIRONMENT=.venv-vllm uv sync --locked --extra vllm
 - [Data](https://github.com/aniruddh-alt/sondekit/blob/main/docs/data.md): dataset formats, columns, chat templates and extraction windows.
 - [Evaluation](https://github.com/aniruddh-alt/sondekit/blob/main/docs/evaluation.md): reading `metrics.json`, baselines, controls and scoring shifted data.
 - [Cookbook](https://github.com/aniruddh-alt/sondekit/blob/main/docs/cookbook.md): worked configs for common probing tasks.
+- [Example configs](https://github.com/aniruddh-alt/sondekit/tree/main/configs): runnable configs with expected results.
 - [Python API](https://github.com/aniruddh-alt/sondekit/blob/main/docs/python-api.md): loading and serving a trained probe from Python.
 - [Configuration](https://github.com/aniruddh-alt/sondekit/blob/main/docs/configuration.md): every option, run outputs, rerun behavior and layer numbering.
 - [Linear probes primer](https://github.com/aniruddh-alt/sondekit/blob/main/docs/linear-probes-primer.md): what linear probes measure, and the papers behind them.

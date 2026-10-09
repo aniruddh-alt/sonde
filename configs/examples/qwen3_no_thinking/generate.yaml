@@ -1,0 +1,33 @@
+# Qwen3-1.7B replies with thinking turned off.
+#
+# data.chat_template_kwargs is passed to the chat template, here to set
+# Qwen3's enable_thinking to false. The same kwargs apply to extraction,
+# scoring and steering, and they are part of the probe's prompt-format
+# digest, so a probe trained this way refuses prompts rendered with thinking
+# on.
+#
+# Requirements:
+#   - python configs/examples/prepare_data.py harmful
+#   - A GPU with about 12 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/qwen3_no_thinking/generate.yaml
+#   grep -c "<think>" runs/qwen3_no_thinking/generations.jsonl
+#
+# Expected results:
+#   - 0 of 20 replies contain <think> (20 of 20 with the kwargs removed)
+#   - under a minute
+#
+# See also:
+#   - docs/cookbook.md: Qwen3 without thinking
+
+name: qwen3_no_thinking
+model: {name: Qwen/Qwen3-1.7B, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful_only200.jsonl
+  format: chat
+  max_length: 256
+  limit: 20
+  chat_template_kwargs: {enable_thinking: false}
+generate: {max_tokens: 32, temperature: 0}
+steps: [generate]

@@ -1,0 +1,32 @@
+# Refusal direction, step 2 of 3: remove it while answering harmful prompts.
+#
+# Generates greedy replies to 200 harmful prompts with the layer-14 direction
+# projected out (strength 1) and without steering (strength 0).
+#
+# Requirements:
+#   - configs/examples/refusal_direction/direction.yaml has run
+#   - A GPU with about 12 GB free.
+#
+# Usage:
+#   sondekit run configs/examples/refusal_direction/ablate.yaml
+#   python configs/examples/refusal_direction/count_refusals.py runs/refusal_ablate
+#
+# Expected results:
+#   - refusal rate 1.00 without steering, 0.07 with the direction removed
+#   - about 1.5 minutes
+#
+# See also:
+#   - configs/examples/refusal_direction/add.yaml
+
+name: refusal_ablate
+model: {name: Qwen/Qwen2.5-1.5B-Instruct, dtype: bfloat16}
+data:
+  path: configs/examples/data/harmful_only200.jsonl
+  format: chat
+  max_length: 256
+generate: {max_tokens: 64, temperature: 0}
+steer:
+  probe: runs/refusal_direction/layers/B14.npz
+  mode: ablate
+  strengths: [0, 1]
+steps: [steer]
