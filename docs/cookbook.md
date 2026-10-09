@@ -87,10 +87,11 @@ field.
 
 ## Out-of-distribution and benign-only score sets
 
-A probe that looks perfect on its own test split can fall to near chance on
-a shifted set, for example a truth probe tested on negated statements. Add
-`score` entries for the sets you care about and look at them before trusting
-the probe.
+A probe that looks perfect on its own test split can break on a shifted set.
+A truth probe trained on statements like "The city of X is in Y" ranks
+negated statements ("... is not in Y") much worse, and its saved threshold
+flags most of them as true. Add `score` entries for the sets you care about
+and look at them before trusting the probe.
 
 ```yaml
 # harmful-prompts.yaml
