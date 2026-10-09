@@ -199,7 +199,7 @@ must be between 0 and `threshold`. A violation raises `ValueError`, for example
 | `serves(fingerprint, adapter, prompt_format="unchecked")` | serving facts | `None` if the probe may score this model, else the reason it may not |
 | `vllm_aux_layer()` | | `block + 1`, the vLLM `extract_hidden_states` layer id for `block` |
 | `backend()` | | the backend part of `engine`, e.g. `hf` |
-| `save(path)` | a `str` path | writes the `.npz` atomically, appending `.npz` if missing, and returns the path written; a `pathlib.Path` raises `AttributeError` |
+| `save(path)` | a `str` or `pathlib.Path` | writes the `.npz` atomically, appending `.npz` if missing, and returns the path written as a `str` |
 | `Probe.load(path)` | path | the validated probe |
 
 `acts` are the activations at `block` over the probe's `window`, one row per
@@ -390,10 +390,11 @@ revision=model.revision)` at training time. To match it when serving:
   and silently change every fingerprint.
 
 For chat probes, compute the served format with
-`fingerprint.prompt_format(tokenizer.chat_template)`. The digest covers the
-template text only. `data.chat_template_kwargs` (such as
-`{enable_thinking: false}` for Qwen3) and `data.system` are not part of it,
-so the serving side has to apply the same values itself.
+`fingerprint.prompt_format(tokenizer.chat_template, chat_template_kwargs)`,
+passing the same `data.chat_template_kwargs` the probe was trained with
+(such as `{"enable_thinking": False}` for Qwen3). Empty or missing kwargs
+give the template-only digest. `data.system` is not part of the digest, so
+the serving side has to apply the same system prompt itself.
 
 ## Getting the right activations
 
@@ -432,14 +433,12 @@ turn when `data.system` is set. Response ids come from the row's
 from `tokenizer(response, add_special_tokens=False)`. Sequences are cut to
 the first `min(data.max_length, tokenizer.model_max_length)` tokens.
 
-`probe.last_turn_start(tokenizer, messages)` returns the number of tokens in
-`messages[:-1]` rendered with the generation prompt, which is where the last
-message starts. It renders without `chat_template_kwargs`. sondekit drops a
-row as `last_turn_prefix_mismatch` when that prefix differs from the one
-rendered with the kwargs. With the Qwen3 tokenizer and
-`chat_template_kwargs: {enable_thinking: false}` the prefixes differ for
-every row, so `window: last_turn` currently drops all of them. Rows whose
-last message is not from the assistant are dropped as `not_assistant_last`.
+`probe.last_turn_start(tokenizer, messages, chat_template_kwargs)` returns
+the number of tokens in `messages[:-1]` rendered with the generation prompt,
+which is where the last message starts. Pass the same kwargs the probe was
+trained with. sondekit drops a row as `last_turn_prefix_mismatch` when that
+prefix is not a prefix of the full conversation's tokens. Rows whose last
+message is not from the assistant are dropped as `not_assistant_last`.
 
 ### Reproducing a score with transformers
 

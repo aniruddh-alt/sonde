@@ -21,7 +21,9 @@ POOLINGS = {
 }
 
 
-def last_turn_start(tokenizer, messages: list[dict]) -> int:
+def last_turn_start(
+    tokenizer, messages: list[dict], chat_template_kwargs: dict | None = None
+) -> int:
     """Token index where a conversation's last message starts.
 
     The fit-time side of the `last_turn` window; mechanica computes the same
@@ -32,12 +34,17 @@ def last_turn_start(tokenizer, messages: list[dict]) -> int:
     Args:
         tokenizer: A Hugging Face tokenizer with a chat template.
         messages: The conversation; its last message is the turn to read.
+        chat_template_kwargs: Extra template variables, as in
+            `data.chat_template_kwargs`.
 
     Returns:
         len(tokens of messages[:-1] rendered with the generation prompt).
     """
     text = tokenizer.apply_chat_template(
-        messages[:-1], tokenize=False, add_generation_prompt=True
+        messages[:-1],
+        tokenize=False,
+        add_generation_prompt=True,
+        **(chat_template_kwargs or {}),
     )
     return len(tokenizer(text, add_special_tokens=False)["input_ids"])
 
@@ -294,7 +301,7 @@ class Probe:
         """The backend token of `engine`, e.g. "vllm" or "hf"."""
         return self.engine.split("==", 1)[0]
 
-    def save(self, path: str) -> str:
+    def save(self, path: str | os.PathLike) -> str:
         """Writes the probe atomically.
 
         Args:
@@ -308,6 +315,7 @@ class Probe:
         arrays = {"w": self.w}
         if self.q is not None:
             arrays["q"] = self.q
+        path = os.fspath(path)
         final = path if path.endswith(".npz") else f"{path}.npz"
         tmp = f"{final}.tmp"
         with open(tmp, "wb") as handle:

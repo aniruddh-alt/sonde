@@ -289,9 +289,8 @@ block. The generation prompt then ends in an empty `<think>\n\n</think>\n\n`
 block, and those tokens are part of the prompt window.
 
 Choose the format the probe will be served under. The probe file records a
-digest of the chat template (or `raw`) and refuses to score prompts rendered
-another way. It does not record `chat_template_kwargs`, so whatever serves the
-probe must pass the same kwargs itself.
+digest of the chat template and any `chat_template_kwargs` (or `raw`), and
+refuses to score prompts rendered another way.
 
 ## Extraction windows
 
@@ -394,11 +393,6 @@ If every row is dropped the run stops:
 ```
 sondekit: error: every row was dropped: {'empty_window': 8}
 ```
-
-With Qwen3 and `chat_template_kwargs: {enable_thinking: false}`, `last_turn`
-currently drops every row as `last_turn_prefix_mismatch`, because the turn
-boundary is computed without the kwargs while the rest of the rendering uses
-them. Use `window: response` with a `response` column for that setup.
 
 ## Which steps need labels
 

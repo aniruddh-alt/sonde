@@ -110,8 +110,8 @@ def run(cfg: config.RunConfig, run_dir: pathlib.Path) -> None:
     test = train.metrics(
         y[te], scores, p.threshold, pc.max_fpr, _at(groups, te)
     )
-    # One shuffled-label fit can land on a dominant feature axis with a
-    # random sign, so the control averages several shuffles.
+    # Several shuffles, so train.control_passed can tell a consistent offset
+    # (leakage) from fits that land on a dominant axis with a random sign.
     control_aurocs = []
     for k in range(_CONTROL_SHUFFLES):
         shuffled = np.random.default_rng(cfg.seed + k).permutation(y)
@@ -175,7 +175,11 @@ def run(cfg: config.RunConfig, run_dir: pathlib.Path) -> None:
         "baseline": baseline,
         "control_auroc": control_auroc,
         "control_aurocs": control_aurocs,
-        "controls_passed": train.control_passed(control_aurocs),
+        "controls_passed": train.control_passed(
+            control_aurocs,
+            int(y[sp["val"]].sum()),
+            int((y[sp["val"]] == 0).sum()),
+        ),
         "n": {k: len(v) for k, v in sp.items()},
     }
     out = run_dir / "probes"

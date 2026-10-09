@@ -312,28 +312,38 @@ train split with each permutation, and computes its validation AUROC against
 the true labels. `control_aurocs` lists the five values and `control_auroc`
 is their mean.
 
-A single shuffle can land far from 0.5 when the label is the strongest
-direction of variance in the activations: the random-label fit can pick that
-axis with either sign. Averaging cancels the sign. The test is
+The control passes when both of these hold:
 
 ```
-controls_passed = |mean - 0.5| <= max(2 * SE, 0.05)
+|mean - 0.5| <= max(2 * SE, 0.05)
+|a - 0.5|    <= max(4 * sd0, 0.05)   for every shuffle AUROC a
 ```
 
-where SE is the standard error of the five AUROCs (sample standard deviation
-divided by the square root of 5).
+SE is the standard error of the five AUROCs (sample standard deviation
+divided by the square root of 5). sd0 is the standard deviation of AUROC
+when scores are independent of labels,
+`sqrt((n_pos + n_neg + 1) / (12 * n_pos * n_neg))` on the validation split.
 
-`controls_passed: false` means the shuffled fits sit off chance in the same
-direction. The probe can then score the true labels without learning them,
-through a property that correlates with the label, such as length under
-`max` pooling. Treat the headline as suspect until you find the cause. Check
-`length_auroc`, and set `data.group` if related rows could land in
-different splits.
+The first check catches shuffles that sit off chance in the same direction.
+The probe can then score the true labels without learning them, through a
+property that correlates with the label, such as length under `max`
+pooling.
 
-The test is weak on small validation sets. In the quickstart the five
-shuffles range from 0.30 to 0.89, which makes the standard error large, and
-the control passes. A pass on a few dozen rows tells you little. Look at the
-spread of `control_aurocs` as well as the flag.
+The second check catches a single shuffle far from 0.5. That happens when
+the label is the strongest direction of variance in the activations: a fit
+to random labels lands on that axis with either sign and separates the
+classes anyway. The probe's own score then says little about what it
+learned. Difference-of-means probes fail this check on most easy tasks,
+because a mean difference over random labels points along the top direction
+of variance.
+
+When `controls_passed` is false, treat the headline as suspect until you
+find the cause. Check `length_auroc` and the bag-of-words baseline, and set
+`data.group` if related rows could land in different splits.
+
+Both checks are loose on small validation sets. In the quickstart (8
+positives and 8 negatives) sd0 is 0.15, so shuffles from 0.30 to 0.89 still
+pass. A pass on a few dozen rows tells you little.
 
 ## The score step
 

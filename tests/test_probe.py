@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import pytest
 
+from sondekit import fingerprint
 from sondekit import probe
 
 H = 4
@@ -70,6 +71,12 @@ def test_round_trip(tmp_path):
         loaded = probe.Probe.load(path)
         assert_same(original, loaded)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["p0.npz", "p1.npz"]
+
+
+def test_save_accepts_a_path(tmp_path):
+    path = make().save(tmp_path / "p")
+    assert path == str(tmp_path / "p.npz")
+    assert_same(make(), probe.Probe.load(path))
 
 
 def test_coerces_on_construction():
@@ -195,6 +202,27 @@ def test_last_turn_start_counts_rendered_prefix():
     assert probe.last_turn_start(CharTokenizer(), messages) == len("hiA:")
 
 
+class ThinkingTokenizer(CharTokenizer):
+    def apply_chat_template(
+        self, messages, tokenize, add_generation_prompt, enable_thinking=True
+    ):
+        text = super().apply_chat_template(
+            messages, tokenize, add_generation_prompt
+        )
+        return text if enable_thinking else f"{text}T"
+
+
+def test_last_turn_start_passes_chat_template_kwargs():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "yo"},
+    ]
+    tok = ThinkingTokenizer()
+    assert probe.last_turn_start(tok, messages) == len("hiA:")
+    off = {"enable_thinking": False}
+    assert probe.last_turn_start(tok, messages, off) == len("hiA:T")
+
+
 def sigmoid(z: float) -> float:
     return 1.0 / (1.0 + math.exp(-z))
 
@@ -223,6 +251,28 @@ def test_serves_refusals():
     ]
     for reason, expected in refusals:
         assert reason is not None and expected in reason, (reason, expected)
+
+
+def test_prompt_format_digest_without_kwargs_is_pinned():
+    want = "tmpl:f24189f08c85a1eb19a737306c3a13e8"
+    assert fingerprint.prompt_format("{{ messages }}") == want
+    assert fingerprint.prompt_format("{{ messages }}", None) == want
+    assert fingerprint.prompt_format("{{ messages }}", {}) == want
+    assert fingerprint.prompt_format(None, {"enable_thinking": False}) == "raw"
+
+
+def test_serves_refuses_chat_template_kwargs_mismatch():
+    template = "{{ messages }}"
+    off = {"enable_thinking": False}
+    plain = fingerprint.prompt_format(template)
+    thinking_off = fingerprint.prompt_format(template, off)
+    reordered = fingerprint.prompt_format(template, {"b": 1, "a": 2})
+    assert reordered == fingerprint.prompt_format(template, {"a": 2, "b": 1})
+    trained_off = make(model_fingerprint="fp", prompt_format=thinking_off)
+    trained_plain = make(model_fingerprint="fp", prompt_format=plain)
+    assert trained_off.serves("fp", None, thinking_off) is None
+    assert "mismatch" in trained_off.serves("fp", None, plain)
+    assert "mismatch" in trained_plain.serves("fp", None, thinking_off)
 
 
 def test_vllm_aux_layer_and_backend():

@@ -225,7 +225,9 @@ def prompt_format_of(src: config.DataConfig, tokenizer) -> str:
     """
     if src.format == "raw":
         return fingerprint.RAW
-    return fingerprint.prompt_format(_template(tokenizer))
+    return fingerprint.prompt_format(
+        _template(tokenizer), src.chat_template_kwargs
+    )
 
 
 def prompt_ids(sample: Sample, src: config.DataConfig, tokenizer) -> list[int]:
@@ -267,7 +269,7 @@ def render(
             raise Drop("not_assistant_last")
         kw = src.chat_template_kwargs
         ids = _chat_ids(tokenizer, msgs, False, kw)
-        start = probe.last_turn_start(tokenizer, msgs)
+        start = probe.last_turn_start(tokenizer, msgs, kw)
         if ids[:start] != _chat_ids(tokenizer, msgs[:-1], True, kw):
             raise Drop("last_turn_prefix_mismatch")
     else:

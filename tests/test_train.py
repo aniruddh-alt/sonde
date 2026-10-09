@@ -215,12 +215,23 @@ def test_window_text():
 
 
 def test_control_is_a_test_against_chance():
-    assert train.control_passed([0.5, 0.52, 0.48, 0.51, 0.49])
-    # A dominant feature axis picked with a random sign is not leakage.
-    assert train.control_passed([0.8, 0.2, 0.75, 0.3, 0.81])
-    # Consistently off chance, in either direction, is.
-    assert not train.control_passed([0.84, 0.86, 0.85, 0.83, 0.87])
-    assert not train.control_passed([0.15, 0.17, 0.16, 0.14, 0.18])
+    assert train.control_passed([0.5, 0.52, 0.48, 0.51, 0.49], 78, 78)
+    # Consistently off chance, in either direction, fails.
+    assert not train.control_passed([0.84, 0.86, 0.85, 0.83, 0.87], 78, 78)
+    assert not train.control_passed([0.15, 0.17, 0.16, 0.14, 0.18], 78, 78)
+
+
+def test_control_fails_when_random_fits_separate_the_classes():
+    # A diff-means run whose shuffles averaged 0.67: the label is the dominant
+    # direction of variance, so a random-label fit finds it with either sign.
+    a = [0.263, 0.365, 0.838, 0.947, 0.945]
+    assert not train.control_passed(a, 78, 78)
+
+
+def test_control_spread_bound_scales_with_validation_size():
+    a = [0.8, 0.2, 0.75, 0.3, 0.81]
+    assert train.control_passed(a, 8, 8)
+    assert not train.control_passed(a, 78, 78)
 
 
 def test_fit_recovers_one_perfect_feature_among_noise():

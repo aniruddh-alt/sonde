@@ -468,9 +468,9 @@ steps: [extract, train, generate]
 ```
 
 `chat_template_kwargs` applies to extraction, scoring, generation and
-steering. The probe records a digest of the chat template but not these
-arguments, so a server must pass the same `enable_thinking: false`, or the
-prompts it scores will differ from the ones the probe was trained on.
+steering. The probe's prompt-format digest includes them, so a server that
+renders prompts without `enable_thinking: false` fails the `serves()` check
+instead of silently scoring different prompts.
 
 ## Where next
 

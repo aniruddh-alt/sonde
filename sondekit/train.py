@@ -72,23 +72,34 @@ def standardise(
     return rows.mean(0), rows.std(0).clamp_min(SIGMA_FLOOR)
 
 
-def control_passed(control_aurocs: Sequence[float]) -> bool:
+def control_passed(
+    control_aurocs: Sequence[float], n_pos: int, n_neg: int
+) -> bool:
     """Whether shuffled-label AUROCs are consistent with chance.
 
-    A single shuffle can land far from 0.5 when the label is the dominant
-    direction of variance: the random-label fit picks that axis with a
-    random sign. Leakage shows as shuffles that sit off chance in the same
-    direction, so this tests the mean against 0.5 with its standard error.
+    Two checks. Leakage shows as shuffles off chance in the same direction,
+    so the mean must sit within max(2 standard errors, 0.05) of 0.5. And
+    each shuffle must sit within max(4 sd0, 0.05) of 0.5, where sd0 is the
+    AUROC's standard deviation under label independence (Mann-Whitney). A
+    random-label fit beyond that separates the classes along a dominant
+    direction of variance with a random sign, so a high probe score does
+    not show that the probe learned anything specific to the label.
 
     Args:
         control_aurocs: Validation AUROC of each shuffled-label fit.
+        n_pos: Positive validation rows.
+        n_neg: Negative validation rows.
 
     Returns:
-        True when the mean is within max(2 standard errors, 0.05) of 0.5.
+        True when both checks pass.
     """
     a = np.asarray(control_aurocs, dtype=np.float64)
     se = a.std(ddof=1) / np.sqrt(len(a)) if len(a) > 1 else 0.0
-    return bool(abs(a.mean() - 0.5) <= max(2 * se, 0.05))
+    sd0 = np.sqrt((n_pos + n_neg + 1) / (12 * n_pos * n_neg))
+    return bool(
+        abs(a.mean() - 0.5) <= max(2 * se, 0.05)
+        and np.abs(a - 0.5).max() <= max(4 * sd0, 0.05)
+    )
 
 
 def diff_means(

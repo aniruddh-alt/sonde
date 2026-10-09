@@ -135,7 +135,10 @@ def test_small_n_val_falls_back_to_auroc(tmp_path):
     assert m["val"]["1"]["small_n"] and m["select_fallback"] == "auroc"
     assert m["block"] == 1
     assert 0.0 <= m["control_auroc"] <= 1.0
-    assert m["controls_passed"] == train.control_passed(m["control_aurocs"])
+    v = m["val"][str(m["block"])]
+    assert m["controls_passed"] == train.control_passed(
+        m["control_aurocs"], v["n_pos"], v["n_neg"]
+    )
     sweep.run(_cfg(tmp_path, "pooled", max_fpr=0.9), tmp_path)
     m = json.loads((tmp_path / "metrics.json").read_text())
     assert not m["val"]["1"]["small_n"] and m["select_fallback"] is None

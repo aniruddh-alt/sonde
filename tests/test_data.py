@@ -288,3 +288,30 @@ def test_chat_template_kwargs_reach_the_template():
         src = config.DataConfig(path="x.jsonl", chat_template_kwargs=kwargs)
         text = tok.decode(data.prompt_ids(row, src, tok))
         assert ("NOTHINK" in text) is marker
+
+
+def test_last_turn_keeps_qwen3_chat_template_kwargs():
+    tok = transformers.AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello there"},
+    ]
+    want = {
+        False: "hello there<|im_end|>\n",
+        True: "<think>\n\n</think>\n\nhello there<|im_end|>\n",
+    }
+    for kwargs, thinking in (({"enable_thinking": False}, False), ({}, True)):
+        src = _src(messages="m", chat_template_kwargs=kwargs)
+        enc = data.render(_sample(messages=msgs), src, "last_turn", tok)
+        assert tok.decode(enc.ids[enc.span[0] :]) == want[thinking]
+
+
+def test_prompt_format_covers_chat_template_kwargs():
+    tok = _tok(TEMPLATE)
+    off = {"enable_thinking": False}
+    assert data.prompt_format_of(
+        _src(chat_template_kwargs=off), tok
+    ) == fingerprint.prompt_format(TEMPLATE, off)
+    assert data.prompt_format_of(_src(), tok) == fingerprint.prompt_format(
+        TEMPLATE
+    )

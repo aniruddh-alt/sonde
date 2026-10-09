@@ -21,15 +21,20 @@ _WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".gguf")
 _CONFIG_NAMES = ("config.json", "generation_config.json", "adapter_config.json")
 
 
-def prompt_format(template: str | None) -> str:
+def prompt_format(template: str | None, chat_template_kwargs: dict | None = None) -> str:
     """Digest the chat template a probe was extracted under, or `RAW` when there was none.
 
     This is the axis that fails silently and totally: a probe fitted on raw text scores raw benign
     prompts 0.002 and the same text templated 0.999999, while its eval card still reads FPR 0.000.
     A digest is enough — the template either matches what extraction used or the score means nothing.
+
+    `chat_template_kwargs` (e.g. Qwen3's `enable_thinking`) change the rendered prompt, so non-empty
+    kwargs are part of the digest; empty kwargs give the template-only digest.
     """
     if template is None:
         return RAW
+    if chat_template_kwargs:
+        template += "\0" + json.dumps(chat_template_kwargs, sort_keys=True)
     return "tmpl:" + hashlib.sha256(template.encode("utf-8")).hexdigest()[:32]
 
 

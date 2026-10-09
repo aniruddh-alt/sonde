@@ -368,8 +368,8 @@ steps: [extract, train]
 bfloat16). Whatever serves the probe later must render prompts with the
 same template and the same `chat_template_kwargs`. The probe records a
 digest of the chat template, and the `score` step refuses a probe whose
-digest differs from the run's. `chat_template_kwargs` are not part of the
-digest, so keeping them the same is up to you.
+digest differs from the run's. Non-empty `chat_template_kwargs` are part of
+that digest.
 
 ## Rerunning
 
